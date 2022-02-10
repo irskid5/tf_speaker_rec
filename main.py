@@ -1,0 +1,68 @@
+import tensorflow as tf
+from tensorflow import keras
+import numpy as np
+import matplotlib.pyplot as plt
+
+print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
+
+mnist = keras.datasets.mnist
+
+(x_train, y_train), (x_test, y_test) = mnist.load_data()
+x_train, x_test = x_train / 255.0, x_test / 255.0
+sample, sample_label = x_train[0], y_train[0]
+
+
+batch_size = 64
+# Each MNIST image batch is a tensor of shape (batch_size, 28, 28).
+# Each input sequence will be of size (28, 28) (height is treated like time).
+input_dim = 28
+
+units = 2048
+output_size = 10  # labels are from 0 to 9
+
+# Build the RNN model
+
+
+def build_model(allow_cudnn_kernel=True):
+    # CuDNN is only available at the layer level, and not at the cell level.
+    # This means `LSTM(units)` will use the CuDNN kernel,
+    # while RNN(LSTMCell(units)) will run on non-CuDNN kernel.
+    if allow_cudnn_kernel:
+        # The LSTM layer with default options uses CuDNN.
+        lstm_layer = keras.layers.LSTM(units, input_shape=(
+            None, input_dim), return_sequences=True)
+    else:
+        # Wrapping a LSTMCell in a RNN layer will not use CuDNN.
+        lstm_layer = keras.layers.RNN(
+            keras.layers.LSTMCell(units), input_shape=(None, input_dim)
+        )
+    model = keras.models.Sequential(
+        [
+            lstm_layer,
+            keras.layers.LSTM(units, input_shape=(
+                None, units), return_sequences=True),
+            keras.layers.LSTM(units, input_shape=(
+                None, units), return_sequences=True),
+            keras.layers.LSTM(units, input_shape=(
+                None, units)),
+            keras.layers.BatchNormalization(),
+            keras.layers.Dense(output_size),
+        ]
+    )
+    model.summary()
+    return model
+
+
+model = build_model(allow_cudnn_kernel=True)
+
+model.compile(
+    loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+    optimizer="sgd",
+    metrics=["accuracy"],
+)
+
+
+model.fit(
+    x_train, y_train, validation_data=(
+        x_test, y_test), batch_size=batch_size, epochs=10
+)

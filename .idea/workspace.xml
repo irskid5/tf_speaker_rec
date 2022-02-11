@@ -2,16 +2,7 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="35868ec8-a4f1-44df-8973-d9effd5d81cf" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/test_code/tensorboard_tut/1_tb_callback.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test_code/tensorboard_tut/2_tb_scalars.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test_code/tensorboard_tut/3_tb_images.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test_code/tensorboard_tut/4_tb_confusion.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test_code/tensorboard_tut/5_tb_graph.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test_code/tensorboard_tut/6_tb_hparams.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test_code/tensorboard_tut/7_tb_projector.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test_code/tensorboard_tut/utils.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_code/test_datasets.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_code/test_datasets.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -220,7 +211,7 @@
       <option name="presentableId" value="Default" />
       <updated>1644516169035</updated>
       <workItem from="1644516170216" duration="3145000" />
-      <workItem from="1644529880187" duration="7911000" />
+      <workItem from="1644529880187" duration="8107000" />
     </task>
     <servers />
   </component>

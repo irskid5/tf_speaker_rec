@@ -161,6 +161,8 @@ NUM_MEL_BINS = 80
 
 max_audio = MAX_NUM_FRAMES * STEP_SIZE + WINDOW_SIZE - STEP_SIZE
 
+AUTOTUNE = tf.data.experimental.AUTOTUNE
+
 
 def pad_audio(audio, min_audio_size):
     """Pads audio that is too short to process

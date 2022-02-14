@@ -7,6 +7,9 @@ test_code/tensorboard_tut/__pycache__/
 checkpoints
 logs
 tb_callback_dir
+.idea
+__pycache__
+utils/__pycache__
 
 # Github boilerplate gitignore
 

@@ -1,0 +1,1 @@
+Speaker recognition model using VoxCeleb1 and mainly LSTM

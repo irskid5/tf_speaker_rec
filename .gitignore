@@ -2,3 +2,6 @@ env
 .vscode
 test_code/tensorboard_tut/logs/
 test_code/tensorboard_tut/__pycache__/
+checkpoints
+logs
+tb_callback_dir

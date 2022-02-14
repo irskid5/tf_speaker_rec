@@ -10,6 +10,7 @@ tb_callback_dir
 .idea
 __pycache__
 utils/__pycache__
+*/__pycache__
 
 # Github boilerplate gitignore
 

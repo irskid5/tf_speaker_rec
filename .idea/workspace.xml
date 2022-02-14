@@ -32,6 +32,7 @@
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
+    <option name="showMembers" value="true" />
   </component>
   <component name="PropertiesComponent">
     <property name="ASKED_SHARE_PROJECT_CONFIGURATION_FILES" value="true" />
@@ -290,7 +291,7 @@
       <workItem from="1644516170216" duration="3145000" />
       <workItem from="1644529880187" duration="8225000" />
       <workItem from="1644600719378" duration="24530000" />
-      <workItem from="1644803199828" duration="4351000" />
+      <workItem from="1644803199828" duration="4622000" />
     </task>
     <servers />
   </component>

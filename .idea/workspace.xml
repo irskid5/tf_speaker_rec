@@ -2,33 +2,7 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="35868ec8-a4f1-44df-8973-d9effd5d81cf" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/data/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/data/voxceleb.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/preprocessing.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test_code/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test_code/tensorboard_tut/README.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/utils/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/utils/audio_processing.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/tf_speaker_rec.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/tf_speaker_rec.iml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/hparams.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/rand_aud_samp_16kHz_int16.wav" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/rand_aud_samp_16kHz_int32.wav" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/rand_aud_samp_16kHz_uint1.wav" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/rand_aud_samp_16kHz_uint4.wav" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/rand_aud_samp_16kHz_uint5.wav" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/rand_aud_samp_16kHz_uint6.wav" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/rand_aud_samp_16kHz_uint8.wav" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/rand_aud_samp_44.1kHz_int32.wav" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/rand_aud_sample.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/scaled_aud_sample.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_code/test_datasets.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_code/test_datasets.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -66,7 +40,7 @@
     <property name="last_opened_file_path" value="$PROJECT_DIR$/test_code/test_datasets.py" />
     <property name="node.js.detected.package.eslint" value="true" />
     <property name="node.js.selected.package.eslint" value="(autodetect)" />
-    <property name="settings.editor.selected.configurable" value="com.jetbrains.python.configuration.PyIntegratedToolsModulesConfigurable" />
+    <property name="settings.editor.selected.configurable" value="advanced.settings" />
   </component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
@@ -315,7 +289,7 @@
       <workItem from="1644516170216" duration="3145000" />
       <workItem from="1644529880187" duration="8225000" />
       <workItem from="1644600719378" duration="24530000" />
-      <workItem from="1644803199828" duration="4052000" />
+      <workItem from="1644803199828" duration="4237000" />
     </task>
     <servers />
   </component>

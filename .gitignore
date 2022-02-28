@@ -6,6 +6,7 @@ test_code/tensorboard_tut/logs/
 test_code/tensorboard_tut/__pycache__/
 checkpoints
 logs
+runs
 tb_callback_dir
 .idea
 __pycache__

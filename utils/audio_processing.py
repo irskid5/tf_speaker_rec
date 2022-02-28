@@ -1,5 +1,6 @@
 import tensorflow as tf
 
+
 def pad_audio(audio, min_audio_size):
     """Pads audio that is too short to process
 
@@ -17,7 +18,7 @@ def pad_audio(audio, min_audio_size):
     # audio is tensor, max_audio is int
     audio_size = tf.shape(audio)[0]
     if audio_size < min_audio_size:
-        audio = tf.pad(audio, [[0, min_audio_size-audio_size]])
+        audio = tf.pad(audio, [[0, min_audio_size - audio_size]])
     return audio
 
 
@@ -61,16 +62,65 @@ def convert_to_log_mel_spec(sample,
         linear_to_mel_weight_matrix.shape[-1:]))
 
     # Get log-mel spectrograms
-    log_mel_spec = tf.math.log(mel_spec + 1e-6)
+    log_mel_spec = tf.math.log(mel_spec + 1e-8)
 
     return log_mel_spec
 
+def convert_to_log_mel_spec_layer(sample,
+                            sr=16000.0,
+                            num_mel_bins=80,
+                            window_size=400,
+                            step_size=160,
+                            upper_hertz=7600.0,
+                            low_hertz=80.0):
+    """Generate log-mel spectrogram of raw audio sample
+
+    Args:
+        sample ([tf.Tensor]): [Raw audio sample]
+        sr (int, optional): [Sample rate]. Defaults to 16000.0.
+        num_mel_bins (int, optional): [Number of mel scale bins]. Defaults to 80.
+        window_size (int, optional): [Number of samples in 1 window]. Defaults to 400.
+        step_size (int, optional): [Number of samples in a stride]. Defaults to 160.
+        upper_hertz (float, optional): [Upper hertz energy]. Defaults to 7600.0.
+        low_hertz (float, optional): [Lower hertz energy]. Defaults to 80.0.
+
+    Returns:
+        [tf.Tensor]: [Normalized log-mel spectrogram]
+    """
+
+    # Perform short-time discrete fourier transform to get spectrograms
+    stfts = tf.signal.stft(sample,
+                           frame_length=window_size,
+                           frame_step=step_size)
+    spec = tf.abs(stfts)
+
+    # Get mel spectrograms
+    num_spec_bins = tf.shape(spec)[-1]
+    linear_to_mel_weight_matrix = tf.signal.linear_to_mel_weight_matrix(
+        num_mel_bins=num_mel_bins, num_spectrogram_bins=num_spec_bins,
+        sample_rate=sr,
+        lower_edge_hertz=low_hertz,
+        upper_edge_hertz=upper_hertz)
+    mel_spec = tf.matmul(spec, linear_to_mel_weight_matrix)
+
+    # Get log-mel spectrograms
+    log_mel_spec = tf.math.log(mel_spec + 1e-8)
+
+    return log_mel_spec
+
+
 def normalize_log_mel(log_mel_spec):
-    # Normalize
-    normalized = log_mel_spec - tf.reduce_mean(log_mel_spec + 1e-8)
-    normalized /= (tf.math.reduce_std(log_mel_spec) + 1e-8)
+    # Normalize every feature bin, across timesteps
+    normalized = log_mel_spec - tf.reduce_mean(log_mel_spec, axis=0)
+    normalized /= (tf.math.reduce_std(log_mel_spec, axis=0) + 1e-8)
 
     return normalized
+
+def normalize_log_mel_layer(log_mel_spec):
+    # Normalize every feature bin, across timesteps
+    normalized = tf.map_fn(normalize_log_mel, log_mel_spec)
+    return normalized
+
 
 def group_and_downsample_spec(mel_spec, n=3, stack_size=4):
     """Downsamples log-mel spectrogram by n with a stride.
@@ -97,6 +147,47 @@ def group_and_downsample_spec(mel_spec, n=3, stack_size=4):
 
     # Group and downsample
     downsampled = tf.map_fn(
-        lambda i: tf.reshape(trimmed_spec[int(i):int(i)+stack_size], [-1]), stack_idxs)
+        lambda i: tf.reshape(trimmed_spec[int(i):int(i) + stack_size], [-1]), stack_idxs)
+
+    return downsampled
+
+
+def group_and_downsample_spec_v2(mel_spec, n=3, stack_size=4):
+    """Downsamples log-mel spectrogram by n with a stride.
+
+    Group features into stack_size every n timesteps.
+
+    Args:
+        mel_spec ([tf.Tensor]): [Log-Mel Spectrogram]
+        n (int, optional): [Downsample factor or stride]. Defaults to 3.
+        stack_size (int, optional): [Number of features to group]. Defaults to 4.
+
+    Returns:
+        [tf.Tensor]: [Downsampled log-mel spectrogram]
+    """
+
+    feat_length = tf.shape(mel_spec)[-1]
+    downsampled = tf.signal.frame(mel_spec, stack_size, n, pad_end=False, axis=0)  # group
+    downsampled = tf.reshape(downsampled, [tf.shape(downsampled)[0], feat_length * stack_size])  # downsample
+
+    return downsampled
+
+def group_and_downsample_spec_v2_layer(mel_spec, n=3, stack_size=4):
+    """Downsamples log-mel spectrogram by n with a stride.
+
+    Group features into stack_size every n timesteps.
+
+    Args:
+        mel_spec ([tf.Tensor]): [Log-Mel Spectrogram]
+        n (int, optional): [Downsample factor or stride]. Defaults to 3.
+        stack_size (int, optional): [Number of features to group]. Defaults to 4.
+
+    Returns:
+        [tf.Tensor]: [Downsampled log-mel spectrogram]
+    """
+
+    feat_length = tf.shape(mel_spec)[-1]
+    downsampled = tf.signal.frame(mel_spec, stack_size, n, pad_end=False, axis=1)  # group
+    downsampled = tf.reshape(downsampled, [tf.shape(downsampled)[0], tf.shape(downsampled)[1], feat_length * stack_size])  # downsample
 
     return downsampled

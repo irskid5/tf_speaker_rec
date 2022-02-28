@@ -2,8 +2,17 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="35868ec8-a4f1-44df-8973-d9effd5d81cf" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/model.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/voxceleb.py" beforeDir="false" afterPath="$PROJECT_DIR$/data/voxceleb.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/preprocessing.py" beforeDir="false" afterPath="$PROJECT_DIR$/preprocessing.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_code/tensorboard_tut/2_tb_scalars.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_code/tensorboard_tut/2_tb_scalars.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_code/test_datasets.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_code/test_datasets.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/utils/audio_processing.py" beforeDir="false" afterPath="$PROJECT_DIR$/utils/audio_processing.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -39,7 +48,7 @@
     <property name="RunOnceActivity.OpenProjectViewOnStart" value="true" />
     <property name="RunOnceActivity.ShowReadmeOnStart" value="true" />
     <property name="WebServerToolWindowFactoryState" value="false" />
-    <property name="last_opened_file_path" value="$PROJECT_DIR$/test_code/test_datasets.py" />
+    <property name="last_opened_file_path" value="$PROJECT_DIR$" />
     <property name="node.js.detected.package.eslint" value="true" />
     <property name="node.js.selected.package.eslint" value="(autodetect)" />
     <property name="settings.editor.selected.configurable" value="advanced.settings" />
@@ -48,6 +57,10 @@
     <key name="CopyFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$/test_code" />
       <recent name="$PROJECT_DIR$/utils" />
+    </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/runs/initial" />
+      <recent name="$PROJECT_DIR$/runs" />
     </key>
   </component>
   <component name="RunManager" selected="Python.main">
@@ -231,6 +244,9 @@
       <module name="tf_speaker_rec" />
       <option name="INTERPRETER_OPTIONS" value="" />
       <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
       <option name="SDK_HOME" value="$PROJECT_DIR$/env/bin/python" />
       <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
       <option name="IS_MODULE_SDK" value="false" />
@@ -291,7 +307,17 @@
       <workItem from="1644516170216" duration="3145000" />
       <workItem from="1644529880187" duration="8225000" />
       <workItem from="1644600719378" duration="24530000" />
-      <workItem from="1644803199828" duration="4622000" />
+      <workItem from="1644803199828" duration="15824000" />
+      <workItem from="1644868895166" duration="15072000" />
+      <workItem from="1644951247279" duration="2744000" />
+      <workItem from="1645057995889" duration="1992000" />
+      <workItem from="1645061795064" duration="6387000" />
+      <workItem from="1645200313601" duration="22849000" />
+      <workItem from="1645286886789" duration="5253000" />
+      <workItem from="1645310062802" duration="5980000" />
+      <workItem from="1645342385927" duration="35170000" />
+      <workItem from="1646065694460" duration="1126000" />
+      <workItem from="1646087926820" duration="196000" />
     </task>
     <servers />
   </component>
@@ -315,13 +341,13 @@
       <breakpoints>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/test_code/test_datasets.py</url>
-          <line>186</line>
-          <option name="timeStamp" value="2" />
+          <line>196</line>
+          <option name="timeStamp" value="40" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/test_code/test_datasets.py</url>
-          <line>171</line>
-          <option name="timeStamp" value="8" />
+          <url>file://$PROJECT_DIR$/preprocessing.py</url>
+          <line>50</line>
+          <option name="timeStamp" value="45" />
         </line-breakpoint>
       </breakpoints>
       <default-breakpoints>
@@ -334,7 +360,8 @@
     </breakpoint-manager>
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
-    <SUITE FILE_PATH="coverage/tf_speaker_rec$test_dataset.coverage" NAME="test_dataset Coverage Results" MODIFIED="1644636608408" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="true" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/test_code" />
+    <SUITE FILE_PATH="coverage/tf_speaker_rec$main.coverage" NAME="main Coverage Results" MODIFIED="1645485348740" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="true" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/tf_speaker_rec$test_dataset.coverage" NAME="test_dataset Coverage Results" MODIFIED="1645291041121" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="true" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/test_code" />
     <SUITE FILE_PATH="coverage/tf_speaker_rec$TestDS.coverage" NAME="main Coverage Results" MODIFIED="1644642310606" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="true" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
   </component>
 </project>

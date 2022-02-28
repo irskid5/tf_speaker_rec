@@ -20,7 +20,8 @@ np.random.seed(seed)
 
 physical_devices = tf.config.list_physical_devices('GPU')
 try:
-    tf.config.experimental.set_memory_growth(physical_devices[0], True)
+    for dev in physical_devices:
+        tf.config.experimental.set_memory_growth(dev, True)
 except:
     # Invalid device or cannot modify virtual devices once initialized.
     pass
@@ -177,11 +178,31 @@ sample = pad_audio(sample, max_audio)
 # Take random segment of audio
 sample = take_random_segment(sample)
 
+batch = True
+if batch:
+    sample_np = sample.numpy()
+    sample_batch = tf.reshape(sample, [1, tf.shape(sample)[0]])
+    for i in range(BATCH_SIZE-1):
+        # sample_batch = tf.map_fn(lambda x: tf.concat((x, sample_np), axis=0), sample_batch)
+        sample_batch = tf.concat((sample_batch, tf.reshape(sample, [1, tf.shape(sample)[0]])), axis=0)
+
+    # Get log_mel spectrogram of sample
+    sample_batch = convert_to_log_mel_spec_layer(sample_batch, sr=SAMPLE_RATE, num_mel_bins=NUM_MEL_BINS,
+                                           window_size=WINDOW_SIZE, step_size=STEP_SIZE, low_hertz=LOWER_EDGE_HERTZ,
+                                           upper_hertz=UPPER_EDGE_HERTZ)
+
+    sample_batch = normalize_log_mel_layer(sample_batch)
+
+    # Group timesteps and downsample log-mel spectrogram
+    sample_batch = group_and_downsample_spec_v2_layer(sample_batch)
+
 # Get log_mel spectrogram of sample
 log_mel_spec = convert_to_log_mel_spec(sample, sr=SAMPLE_RATE, num_mel_bins=NUM_MEL_BINS,
                                        window_size=WINDOW_SIZE, step_size=STEP_SIZE, low_hertz=LOWER_EDGE_HERTZ, upper_hertz=UPPER_EDGE_HERTZ)
 
+log_mel_spec = normalize_log_mel(log_mel_spec)
+
 # Group timesteps and downsample log-mel spectrogram
-ds_log_mel_spec = group_and_downsample_spec(log_mel_spec)
+ds_log_mel_spec = group_and_downsample_spec_v2(log_mel_spec)
 
 print("End")

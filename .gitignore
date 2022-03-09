@@ -4,14 +4,15 @@ env
 .vscode
 test_code/tensorboard_tut/logs/
 test_code/tensorboard_tut/__pycache__/
-checkpoints
-logs
-runs
-tb_callback_dir
+checkpoints/
+runs/*/checkpoints/
+runs/*/logs/tensorboard/plugins/*
 .idea
 __pycache__
 utils/__pycache__
 */__pycache__
+cm*
+runs
 
 # Github boilerplate gitignore
 

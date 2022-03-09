@@ -7,8 +7,13 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 from tensorflow.keras import models
+from tensorflow.keras import optimizers
+from tensorflow.keras import losses
+from tensorflow.keras import metrics
 import numpy as np
 import matplotlib.pyplot as plt
+import sklearn.metrics
+from pycm import *
 from datetime import datetime
 
 # DATA
@@ -16,8 +21,11 @@ import data
 from preprocessing import get_dataset
 # MODEL
 from model import *
+# from utils.metrics import eer
 # PARAMS
 from config import *
+# GENERAL UTILS
+from utils.general import *
 
 RUN_DIR = RUNS_DIR + datetime.now().strftime("%Y%m%d-%H%M%S") + "/"
 
@@ -64,7 +72,7 @@ def configure_environment(gpu_names, fp16_run=False, multi_strategy=False):
             devices=gpu_names)
         num_workers = len(gpus)
     else:
-        device = gpus[1].name[len('/physical_device:'):]
+        device = gpus[0].name[len('/physical_device:'):]
         print('Running single gpu: {}'.format(device))
         strategy = tf.distribute.OneDeviceStrategy(
             device=device)
@@ -72,11 +80,19 @@ def configure_environment(gpu_names, fp16_run=False, multi_strategy=False):
 
     return strategy, dtype, num_workers
 
+def run_metrics(y_pred,
+                y_true,
+                metrics,
+                strategy=None):
 
-def setup_hparams(log_dir, checkpoint):
-    if checkpoint is not None:
-        checkpoint_dir = os.path.dirname(os.path.realpath(checkpoint))
-        hparams = load_hparams(checkpoint_dir)
+    return {
+        metric_fn.__name__: metric_fn(y_true, y_pred)
+        for metric_fn in metrics}
+
+
+def setup_hparams(log_dir, hparam_dir):
+    if hparam_dir is not None:
+        hparams = load_hparams(hparam_dir)
 
         tb_hparams = {}
         tb_keys = [
@@ -127,20 +143,20 @@ def setup_hparams(log_dir, checkpoint):
             HP_NUM_EPOCHS: HP_NUM_EPOCHS.domain.values[0]
         }
 
-    with tf.summary.create_file_writer(os.path.join(log_dir, 'hparam_tuning')).as_default():
-        hp.hparams_config(
-            hparams=[
-                HP_MAX_NUM_FRAMES,
-                HP_NUM_LSTM_UNITS,
-                HP_NUM_DENSE_UNITS,
-                HP_LR,
-                # HP_SHUFFLE_BUFFER_SIZE
-            ],
-            metrics=[
-                hp.Metric(METRIC_ACCURACY, display_name='Accuracy'),
-                hp.Metric(METRIC_EER, display_name='EER'),
-            ],
-        )
+        with tf.summary.create_file_writer(os.path.join(log_dir, 'hparam_tuning')).as_default():
+            hp.hparams_config(
+                hparams=[
+                    HP_MAX_NUM_FRAMES,
+                    HP_NUM_LSTM_UNITS,
+                    HP_NUM_DENSE_UNITS,
+                    HP_LR,
+                    # HP_SHUFFLE_BUFFER_SIZE
+                ],
+                metrics=[
+                    hp.Metric(METRIC_ACCURACY, display_name='Accuracy'),
+                    # hp.Metric(METRIC_EER, display_name='EER'),
+                ],
+            )
 
     return {k.name: v for k, v in tb_hparams.items()}, tb_hparams
 
@@ -158,7 +174,7 @@ def main(_):
     # Init hparams, choose to load from ckpt or config
     hparams, tb_hparams = setup_hparams(
         log_dir=(RUN_DIR+TB_LOGS_DIR),
-        checkpoint=checkpoint_dir)
+        hparam_dir=checkpoint_dir)
 
     # Load dataset !! CHOOSE DATASET HERE !!
     ds_train, ds_val, ds_test, ds_info = get_dataset("voxceleb",
@@ -166,7 +182,8 @@ def main(_):
                                                      data.voxceleb,
                                                      num_workers,
                                                      strategy,
-                                                     hparams)
+                                                     hparams,
+                                                     is_hparam_search=False)
     # init training
     lr = hparams[HP_LR.name]
     with strategy.scope():
@@ -181,14 +198,10 @@ def main(_):
         save_hparams(hparams, RUN_DIR+TB_LOGS_DIR)
 
         model.compile(
-            optimizer=keras.optimizers.Adam(learning_rate=lr),
-            loss=keras.losses.SparseCategoricalCrossentropy(from_logits=False),  # True if last layer is not softmax
-            metrics=["accuracy"],
+            optimizer=optimizers.Adam(learning_rate=lr),
+            loss=losses.SparseCategoricalCrossentropy(from_logits=False),  # True if last layer is not softmax
+            metrics=["accuracy", metrics.SparseTopKCategoricalAccuracy(k=5)],
         )
-
-    # Log hyperparameters
-    with tf.summary.create_file_writer((RUN_DIR+TB_LOGS_DIR)).as_default():
-        hp.hparams(tb_hparams)
 
     # Define callbacks
     tb_callback = keras.callbacks.TensorBoard(
@@ -209,6 +222,28 @@ def main(_):
         monitor='val_accuracy', min_delta=0.0001, patience=4, verbose=1
     )
 
+    # file_writer_cm = tf.summary.create_file_writer(RUN_DIR + TB_LOGS_DIR + "image/cm/")
+    # def log_confusion_matrix(epoch, logs):
+    #     # Get ds
+    #     y_true = np.concatenate([y for x, y in ds_val], axis=0)
+
+    #     # Use the model to predict the values.
+    #     y_pred_raw = model.predict(ds_val)
+        
+    #     y_pred = np.argmax(y_pred_raw, axis=-1)
+    #     y_true = np.concatenate([y for x, y in ds_val], axis=0)
+        
+    #     # Calculate the confusion matrix using sklearn.metrics
+    #     cm = sklearn.metrics.confusion_matrix(y_pred, y_pred)
+        
+    #     figure = plot_confusion_matrix(cm, class_names=np.arange(0, ds_info.features['label'].num_classes, 1))
+    #     cm_image = plot_to_image(figure)
+        
+    #     # Log the confusion matrix as an image summary.
+    #     with file_writer_cm.as_default():
+    #         tf.summary.image("Confusion Matrix", cm_image, step=epoch)
+    # cm_callback = keras.callbacks.LambdaCallback(on_epoch_end=log_confusion_matrix) 
+
     # Train
     num_epochs = hparams[HP_NUM_EPOCHS.name]
     try:
@@ -216,7 +251,7 @@ def main(_):
             ds_train,
             epochs=num_epochs,
             validation_data=ds_val,
-            callbacks=[tb_callback, ckpt_callback, early_stop_callback],
+            callbacks=[tb_callback, early_stop_callback, ckpt_callback],
             verbose=1,
             # steps_per_epoch=20 # FOR TESTING TO MAKE EPOCH SHORTER
         )
@@ -224,21 +259,14 @@ def main(_):
         print(e)
         pass
 
-def hparam_search(_):
-    def run(run_dir, current_hparams):
-        # Init the environment
-        strategy, dtype, num_workers = configure_environment(
-            gpu_names=None,
-            fp16_run=False,
-            multi_strategy=MULTI_STRATEGY)
+    # Log results
+    with tf.summary.create_file_writer((RUN_DIR+TB_LOGS_DIR)).as_default():
+        # Log hyperparameters
+        hp.hparams(tb_hparams)
 
-        # Load dataset !! CHOOSE DATASET HERE !!
-        ds_train, ds_val, ds_test, ds_info = get_dataset("voxceleb",
-                                                         VOXCELEB_DIR,
-                                                         data.voxceleb,
-                                                         num_workers,
-                                                         strategy,
-                                                         current_hparams)
+
+def hparam_search(_):
+    def run(run_dir, current_hparams, strategy, ds_train, ds_val, ds_info):
 
         # Init training
         with strategy.scope():
@@ -257,7 +285,7 @@ def hparam_search(_):
         # hp_callback = hp.KerasCallback(run_dir, current_hparams)
 
         # Train
-        num_epochs = 1
+        num_epochs = 1 # !!Change this to test n epochs!!
         try:
             model.fit(
                 ds_train,
@@ -276,18 +304,34 @@ def hparam_search(_):
 
         return None
 
+        # Init the environment
+    strategy, dtype, num_workers = configure_environment(
+        gpu_names=None,
+        fp16_run=False,
+        multi_strategy=MULTI_STRATEGY)
+
     # Init hparams, choose to load from ckpt or config
     hparams, tb_hparams = setup_hparams(
         log_dir=(RUN_DIR + TB_LOGS_DIR),
-        checkpoint=None)
+        hparam_dir=None)
 
+    # !! Loop over hparams you want to test !!
     session_num = 0
     for max_num_frames in HP_MAX_NUM_FRAMES.domain.values:
+        # Cache dataset
+        hparams[HP_MAX_NUM_FRAMES.name] = max_num_frames
+        ds_train, ds_val, _, ds_info = get_dataset("voxceleb",
+                                                         VOXCELEB_DIR,
+                                                         data.voxceleb,
+                                                         num_workers,
+                                                         strategy,
+                                                         hparams,
+                                                         is_hparam_search=True)
+
         for num_lstm_units in HP_NUM_LSTM_UNITS.domain.values:
             for num_dense_units in HP_NUM_DENSE_UNITS.domain.values:
                 for lr in HP_LR.domain.values:
                     # Set current hparams
-                    hparams[HP_MAX_NUM_FRAMES.name] = max_num_frames
                     hparams[HP_NUM_LSTM_UNITS.name] = num_lstm_units
                     hparams[HP_NUM_DENSE_UNITS.name] = num_dense_units
                     hparams[HP_LR.name] = lr
@@ -301,14 +345,148 @@ def hparam_search(_):
                            HP_LR.name: lr})
 
                     # Run training
-                    run(RUN_DIR + TB_LOGS_DIR + 'hparam_tuning/' + run_name, hparams)
+                    run(RUN_DIR + TB_LOGS_DIR + 'hparam_tuning/' + run_name, hparams, strategy, ds_train, ds_val, ds_info)
                     session_num += 1
+
+
+def run_evaluate(model,
+                 optimizer,
+                 loss_fn,
+                 eval_dataset,
+                 batch_size,
+                 strategy,
+                 hparams,
+                 num_classes,
+                 metrics=[],
+                 fp16_run=False):
+
+    feat_size = hparams[HP_NUM_MEL_BINS.name] * (hparams[HP_DOWNSAMPLE_FACTOR.name]+1)
+        
+    
+    def eval_step(dist_inputs):
+        def step_fn(inputs):
+            x, y_true = inputs
+
+            y_pred = model(x, training=False)
+
+            cm = calc_confusion_matrix(y_true=y_true, y_pred=y_pred, num_classes=num_classes, one_hot=True)
+
+            loss = loss_fn(y_true, y_pred)
+
+            if metrics is not None:
+                metric_results = run_metrics(y_pred=y_pred, y_true=y_true,
+                    metrics=metrics, strategy=strategy)
+
+            return loss, metric_results, cm
+
+        loss, metrics_results, cm = strategy.run(step_fn, args=(dist_inputs,))
+        loss = strategy.reduce(
+            tf.distribute.ReduceOp.MEAN, loss, axis=0)
+        metrics_results = {name: strategy.reduce(
+            tf.distribute.ReduceOp.MEAN, result, axis=0) for name, result in metrics_results.items()}
+
+        return loss, metrics_results, cm
+
+    print('Performing evaluation.')
+
+    loss_object = keras.metrics.Mean()
+    metric_objects = {fn.__name__: keras.metrics.Mean() for fn in metrics}
+    cm_full = np.zeros(shape=(num_classes, num_classes))
+
+    for batch, inputs in enumerate(eval_dataset):
+
+        loss, metrics_results, cm = eval_step(inputs)
+
+        loss_object(loss)
+        for metric_name, metric_result in metrics_results.items():
+            metric_objects[metric_name](metric_result)
+
+        cm_full += cm
+
+    final_results = {name: metric_object.result().numpy() for name, metric_object in metric_objects.items()}
+    final_results[loss_fn.__name__] = loss_object.result().numpy()
+    final_results["cm"] = cm_full
+
+    return final_results
+
+
+def test_model(_):
+    # Add checkpoint folder
+    checkpoint_dir = "runs/20220308-005619/checkpoints/"
+
+    # Init the environment
+    strategy, dtype, num_workers = configure_environment(
+        gpu_names=None,
+        fp16_run=False,
+        multi_strategy=False)
+
+    # Init hparams, choose to load from ckpt or config
+    hparams, tb_hparams = setup_hparams(
+        log_dir=checkpoint_dir+"../"+TB_LOGS_DIR,
+        hparam_dir=checkpoint_dir+"../"+TB_LOGS_DIR)
+
+    # Load dataset !! CHOOSE DATASET HERE !!
+    ds_train, ds_val, ds_test, ds_info = get_dataset("voxceleb",
+                                                     VOXCELEB_DIR,
+                                                     data.voxceleb,
+                                                     num_workers,
+                                                     strategy,
+                                                     hparams,
+                                                     is_hparam_search=False)
+
+    lr = hparams[HP_LR.name]
+    with strategy.scope():
+        # Get model
+        model = get_model(hparams, ds_info.features['label'].num_classes)
+
+        # Load weights if we starting from checkpoint
+        if checkpoint_dir is not None:
+            model.load_weights(checkpoint_dir)
+            logging.info('Restored weights from {}.'.format(checkpoint_dir))
+
+        model.compile(
+            optimizer=optimizers.Adam(learning_rate=lr),
+            loss=losses.SparseCategoricalCrossentropy(from_logits=False),  # True if last layer is not softmax
+            metrics=["accuracy", metrics.SparseTopKCategoricalAccuracy(k=5)],
+        )
+
+    print("Start testing!")
+
+    eval_dataset = ds_test
+    eval_metrics = [metrics.sparse_categorical_accuracy, metrics.sparse_top_k_categorical_accuracy]
+    eval_res = run_evaluate(
+        model, 
+        optimizer=optimizers.Adam(learning_rate=lr), 
+        loss_fn=losses.sparse_categorical_crossentropy, 
+        eval_dataset=eval_dataset, 
+        batch_size=None, 
+        strategy=strategy,
+        hparams=hparams,
+        num_classes=ds_info.features['label'].num_classes,
+        metrics=eval_metrics, 
+        fp16_run=False)
+
+    # Confusion matrix analysis
+    cm_dict = {idx: {i: int(v) for i, v in enumerate(val)} for idx, val in enumerate(eval_res['cm'])}
+    cm = ConfusionMatrix(matrix=cm_dict)
+    print("Plotting Confusion Matrix")
+    cm.save_html("cm")
+    cm.save_csv("cm")
+    cm.save_stat("cm")
+    eval_res.pop('cm', None)
+
+    # Show final results
+    print("Results: ")
+    print(eval_res)
+
+    print("End of Testing")
 
 
 if __name__ == '__main__':
     # app.run(main)
-    app.run(hparam_search)
-    # print("End")
+    # app.run(hparam_search)
+    app.run(test_model)
+    print("End")
 
 # CUSTOM TRAINING LOOP
 # loss_fn = keras.losses.SparseCategoricalCrossentropy(from_logits=False)

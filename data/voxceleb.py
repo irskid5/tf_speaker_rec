@@ -37,8 +37,8 @@ def take_random_segment(data, max_audio_length):
 
 
 def preprocess(data, label, max_audio_length):
-    processed = convert_to_float32(data)
-    processed = pad_audio(processed, max_audio_length)
+    # processed = convert_to_float32(data)
+    processed = pad_audio(data, max_audio_length)
     processed = take_random_segment(processed, max_audio_length)
     # processed = convert_to_log_mel_spec(
     #     processed,
@@ -54,4 +54,9 @@ def preprocess(data, label, max_audio_length):
     #     n=DOWNSAMPLE_FACTOR,
     #     stack_size=STACK_SIZE)
 
+    return processed, label
+
+
+def preprocess_cast(data, label, max_audio_length):
+    processed = convert_to_float32(data)
     return processed, label

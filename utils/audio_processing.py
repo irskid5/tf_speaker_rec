@@ -18,7 +18,7 @@ def pad_audio(audio, min_audio_size):
     # audio is tensor, max_audio is int
     audio_size = tf.shape(audio)[0]
     if audio_size < min_audio_size:
-        audio = tf.pad(audio, [[0, min_audio_size - audio_size]])
+        audio = tf.pad(audio, [[0, min_audio_size - audio_size + 2]])
     return audio
 
 
@@ -105,6 +105,9 @@ def convert_to_log_mel_spec_layer(sample,
 
     # Get log-mel spectrograms
     log_mel_spec = tf.math.log(mel_spec + 1e-8)
+
+    # TEST
+    # mfccs = tf.signal.mfccs_from_log_mel_spectrograms(log_mel_spec)
 
     return log_mel_spec
 

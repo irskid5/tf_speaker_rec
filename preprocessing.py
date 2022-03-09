@@ -9,8 +9,8 @@ from utils.audio_processing import *
 from config import *
 
 # Init constants
-# AUTOTUNE = tf.data.experimental.AUTOTUNE
-AUTOTUNE = 1
+AUTOTUNE = tf.data.experimental.AUTOTUNE
+# AUTOTUNE = 1
 
 
 def import_dataset(dataset_name, dataset_dir):
@@ -48,23 +48,26 @@ def preprocess_and_load(ds_train, ds_val, ds_test, ds_info, preprocessor, num_wo
     MAX_AUDIO_LENGTH = hparams[HP_MAX_NUM_FRAMES.name] * FRAME_STEP + FRAME_LENGTH - FRAME_STEP
 
     # Setup for train dataset
+    ds_train = ds_train.map(lambda x, y: preprocessor.preprocess_cast(x, y, MAX_AUDIO_LENGTH), num_parallel_calls=AUTOTUNE)
+    # ds_train = ds_train.cache()
     ds_train = ds_train.map(lambda x, y: preprocessor.preprocess(x, y, MAX_AUDIO_LENGTH), num_parallel_calls=AUTOTUNE)
     ds_train = ds_train.shuffle(SHUFFLE_BUFFER_SIZE)  # ds_info.splits["train"].num_examples)
-    # ds_train = ds_train.cache()
     ds_train = ds_train.batch(BATCH_SIZE*num_workers, drop_remainder=True)
     ds_train = ds_train.prefetch(AUTOTUNE)
 
     # Setup for validation dataset
+    ds_val = ds_val.map(lambda x, y: preprocessor.preprocess_cast(x, y, MAX_AUDIO_LENGTH), num_parallel_calls=AUTOTUNE)
+    # ds_val = ds_val.cache()
     ds_val = ds_val.map(lambda x, y: preprocessor.preprocess(x, y, MAX_AUDIO_LENGTH), num_parallel_calls=AUTOTUNE)
     # ds_val = ds_val.shuffle(ds_info.splits["validation"].num_examples)
-    # ds_val = ds_val.cache()
     ds_val = ds_val.batch(BATCH_SIZE*num_workers, drop_remainder=True)
     ds_val = ds_val.prefetch(AUTOTUNE)
 
     # Setup for test dataset
+    ds_test = ds_test.map(lambda x, y: preprocessor.preprocess_cast(x, y, MAX_AUDIO_LENGTH), num_parallel_calls=AUTOTUNE)
     ds_test = ds_test.map(lambda x, y: preprocessor.preprocess(x, y, MAX_AUDIO_LENGTH), num_parallel_calls=AUTOTUNE)
     ds_test = ds_test.shuffle(ds_info.splits["test"].num_examples)
-    # ds_test = ds_test.batch(BATCH_SIZE)
+    ds_test = ds_test.batch(BATCH_SIZE*num_workers, drop_remainder=True)
     ds_test = ds_test.prefetch(AUTOTUNE)
 
     # ds_train = strategy.experimental_distribute_dataset(ds_train)
@@ -74,9 +77,46 @@ def preprocess_and_load(ds_train, ds_val, ds_test, ds_info, preprocessor, num_wo
     return ds_train, ds_val, ds_test
 
 
-def get_dataset(dataset_name, dataset_dir, preprocessor, num_workers, strategy, hparams):
+def preprocess_and_load_hparam_search(ds_train, ds_val, ds_test, ds_info, preprocessor, num_workers, strategy, hparams):
+    # Parameters
+    BATCH_SIZE = hparams[HP_BATCH_SIZE.name]
+    SHUFFLE_BUFFER_SIZE = hparams[HP_SHUFFLE_BUFFER_SIZE.name]
+    SAMPLE_RATE = hparams[HP_SAMPLE_RATE.name]
+    FRAME_LENGTH = int(hparams[HP_FRAME_LENGTH.name] * SAMPLE_RATE)
+    FRAME_STEP = int(hparams[HP_FRAME_STEP.name] * SAMPLE_RATE)
+    MAX_AUDIO_LENGTH = hparams[HP_MAX_NUM_FRAMES.name] * FRAME_STEP + FRAME_LENGTH - FRAME_STEP
+
+    # Setup for train dataset
+    ds_train = ds_train.map(lambda x, y: preprocessor.preprocess(x, y, MAX_AUDIO_LENGTH), num_parallel_calls=AUTOTUNE)
+    # ds_train = ds_train.shuffle(SHUFFLE_BUFFER_SIZE)  # ds_info.splits["train"].num_examples)
+    ds_train = ds_train.batch(BATCH_SIZE*num_workers, drop_remainder=True)
+    ds_train = ds_train.cache()
+    ds_train = ds_train.prefetch(AUTOTUNE)
+
+    # Setup for validation dataset
+    ds_val = ds_val.map(lambda x, y: preprocessor.preprocess(x, y, MAX_AUDIO_LENGTH), num_parallel_calls=AUTOTUNE)
+    # ds_val = ds_val.shuffle(ds_info.splits["validation"].num_examples)
+    ds_val = ds_val.batch(BATCH_SIZE*num_workers, drop_remainder=True)
+    ds_val = ds_val.cache()
+    ds_val = ds_val.prefetch(AUTOTUNE)
+
+    # Setup for test dataset
+    ds_test = ds_test.map(lambda x, y: preprocessor.preprocess(x, y, MAX_AUDIO_LENGTH), num_parallel_calls=AUTOTUNE)
+    ds_test = ds_test.shuffle(ds_info.splits["test"].num_examples)
+    # ds_test = ds_test.batch(BATCH_SIZE)
+    ds_test = ds_test.prefetch(AUTOTUNE)
+
+    return ds_train, ds_val, ds_test
+
+
+def get_dataset(dataset_name, dataset_dir, preprocessor, num_workers, strategy, hparams, is_hparam_search):
     ds_train, ds_val, ds_test, ds_info = import_dataset(dataset_name, dataset_dir)
-    ds_train, ds_val, ds_test = preprocess_and_load(ds_train, ds_val, ds_test, ds_info,
+    if not is_hparam_search:
+        ds_train, ds_val, ds_test = preprocess_and_load(ds_train, ds_val, ds_test, ds_info,
+                                                    preprocessor, num_workers, strategy,
+                                                    hparams)
+    else:
+        ds_train, ds_val, ds_test = preprocess_and_load_hparam_search(ds_train, ds_val, ds_test, ds_info,
                                                     preprocessor, num_workers, strategy,
                                                     hparams)
     return ds_train, ds_val, ds_test, ds_info

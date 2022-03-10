@@ -7,11 +7,11 @@ from sklearn.preprocessing import OneHotEncoder
 
 import tensorflow as tf
 
-def calc_confusion_matrix(y_true, y_pred, num_classes, one_hot=True):
+def calc_confusion_matrix(y_true, y_pred, num_classes, one_hot):
     if one_hot:
-        cm = sklearn.metrics.confusion_matrix(y_true=y_true.numpy(), y_pred=tf.argmax(y_pred, axis=-1).numpy(), labels=np.arange(num_classes)) 
+        cm = sklearn.metrics.confusion_matrix(y_true=y_true, y_pred=np.argmax(y_pred, axis=-1), labels=np.arange(num_classes)) 
     else:
-        cm = sklearn.metrics.confusion_matrix(y_true=y_true.numpy(), y_pred=y_pred.numpy(), labels=np.arange(num_classes)) 
+        cm = sklearn.metrics.confusion_matrix(y_true=y_true, y_pred=y_pred, labels=np.arange(num_classes)) 
     return cm
 
 def plot_confusion_matrix(cm, class_names):

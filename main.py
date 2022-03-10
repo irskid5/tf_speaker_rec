@@ -358,18 +358,27 @@ def run_evaluate(model,
                  hparams,
                  num_classes,
                  metrics=[],
-                 fp16_run=False):
+                 fp16_run=False,
+                 with_cm=False):
 
     feat_size = hparams[HP_NUM_MEL_BINS.name] * (hparams[HP_DOWNSAMPLE_FACTOR.name]+1)
         
-    
+    @tf.function(input_signature=[[
+        tf.TensorSpec(shape=[None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None], dtype=tf.int64)
+    ]])
     def eval_step(dist_inputs):
         def step_fn(inputs):
             x, y_true = inputs
 
             y_pred = model(x, training=False)
 
-            cm = calc_confusion_matrix(y_true=y_true, y_pred=y_pred, num_classes=num_classes, one_hot=True)
+            cm = None
+            if with_cm:
+                cm = tf.numpy_function(
+                    calc_confusion_matrix, 
+                    inp=[y_true, y_pred, num_classes, True], 
+                    Tout=tf.int64)
 
             loss = loss_fn(y_true, y_pred)
 
@@ -401,11 +410,12 @@ def run_evaluate(model,
         for metric_name, metric_result in metrics_results.items():
             metric_objects[metric_name](metric_result)
 
-        cm_full += cm
+        if with_cm:
+            cm_full += cm
 
     final_results = {name: metric_object.result().numpy() for name, metric_object in metric_objects.items()}
     final_results[loss_fn.__name__] = loss_object.result().numpy()
-    final_results["cm"] = cm_full
+    final_results["cm"] = cm_full.numpy() if with_cm else None
 
     return final_results
 
@@ -454,6 +464,7 @@ def test_model(_):
 
     eval_dataset = ds_test
     eval_metrics = [metrics.sparse_categorical_accuracy, metrics.sparse_top_k_categorical_accuracy]
+    with_cm=True
     eval_res = run_evaluate(
         model, 
         optimizer=optimizers.Adam(learning_rate=lr), 
@@ -464,19 +475,23 @@ def test_model(_):
         hparams=hparams,
         num_classes=ds_info.features['label'].num_classes,
         metrics=eval_metrics, 
-        fp16_run=False)
+        fp16_run=False,
+        with_cm=with_cm)
 
     # Confusion matrix analysis
-    cm_dict = {idx: {i: int(v) for i, v in enumerate(val)} for idx, val in enumerate(eval_res['cm'])}
-    cm = ConfusionMatrix(matrix=cm_dict)
-    print("Plotting Confusion Matrix")
-    cm.save_html("cm")
-    cm.save_csv("cm")
-    cm.save_stat("cm")
-    eval_res.pop('cm', None)
+    if with_cm:
+        print("Confusion Matrix selected")
+        print("Saving Confusion Matrix")
+        cm_dict = {idx: {i: int(v) for i, v in enumerate(val)} for idx, val in enumerate(eval_res['cm'])}
+        cm = ConfusionMatrix(matrix=cm_dict)
+        print("Saving CSV")
+        cm.save_csv("cm")
+        print("Saving Stat")
+        cm.save_stat("cm")
+        eval_res.pop('cm', None)
 
     # Show final results
-    print("Results: ")
+    print("Final Results: ")
     print(eval_res)
 
     print("End of Testing")

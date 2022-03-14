@@ -498,9 +498,9 @@ def test_model(_):
 
 
 if __name__ == '__main__':
-    # app.run(main)
+    app.run(main)
     # app.run(hparam_search)
-    app.run(test_model)
+    # app.run(test_model)
     print("End")
 
 # CUSTOM TRAINING LOOP

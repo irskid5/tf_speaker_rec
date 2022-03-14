@@ -1,9 +1,10 @@
-absl-py==1.0.0
+absl_py==1.0.0
 keras==2.7.0
 matplotlib==3.5.1
 numpy==1.22.1
 opencv_python==4.5.5.62
 pandas==1.4.0
+pycm==3.4
 scikit_learn==1.0.2
 scipy==1.7.3
 tensorflow==2.7.0

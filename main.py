@@ -3,8 +3,14 @@ os.environ["TF_FORCE_GPU_ALLOW_GROWTH"]="true"
 os.environ["TF_GPU_THREAD_MODE"]="gpu_private"
 
 from absl import flags, logging, app
+from tqdm import tqdm
 import tensorflow as tf
+
+tf.config.optimizer.set_jit(True)
+
+import tensorflow_addons as tfa
 from tensorflow import keras
+from keras.utils import losses_utils
 from tensorflow.keras import layers
 from tensorflow.keras import models
 from tensorflow.keras import optimizers
@@ -103,6 +109,7 @@ def setup_hparams(log_dir, hparam_dir):
             HP_FRAME_STEP,
             HP_UPPER_HERTZ,
             HP_LOWER_HERTZ,
+            HP_FFT_LENGTH,
             HP_DOWNSAMPLE_FACTOR,
             HP_STACK_SIZE,
             HP_NUM_LSTM_UNITS,
@@ -183,12 +190,13 @@ def main(_):
                                                      num_workers,
                                                      strategy,
                                                      hparams,
-                                                     is_hparam_search=False)
+                                                     is_hparam_search=False,
+                                                     eval_full=False)
     # init training
     lr = hparams[HP_LR.name]
     with strategy.scope():
         # Get model
-        model = get_model(hparams, ds_info.features['label'].num_classes)
+        model = get_model(hparams, ds_info.features['label'].num_classes, stateful=False)
 
         # Load weights if we starting from checkpoint
         if checkpoint_dir is not None:
@@ -199,8 +207,8 @@ def main(_):
 
         model.compile(
             optimizer=optimizers.Adam(learning_rate=lr),
-            loss=losses.SparseCategoricalCrossentropy(from_logits=False),  # True if last layer is not softmax
-            metrics=["accuracy", metrics.SparseTopKCategoricalAccuracy(k=5)],
+            loss=losses.CategoricalCrossentropy(from_logits=False, reduction=losses_utils.ReductionV2.AUTO),  # True if last layer is not softmax
+            metrics=[metrics.CategoricalAccuracy(), metrics.TopKCategoricalAccuracy(k=5)],
         )
 
     # Define callbacks
@@ -219,8 +227,11 @@ def main(_):
     # fault_tol_callback = tf.keras.callbacks.experimental.BackupAndRestore(backup_dir=(RUN_DIR + BACKUP_DIR))
 
     early_stop_callback = keras.callbacks.EarlyStopping(
-        monitor='val_accuracy', min_delta=0.0001, patience=4, verbose=1
+        monitor='val_categorical_accuracy', min_delta=0.0001, patience=4, verbose=1
     )
+
+    reduce_lr = keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.2,
+                              patience=2, min_lr=0.0001)
 
     # file_writer_cm = tf.summary.create_file_writer(RUN_DIR + TB_LOGS_DIR + "image/cm/")
     # def log_confusion_matrix(epoch, logs):
@@ -251,7 +262,7 @@ def main(_):
             ds_train,
             epochs=num_epochs,
             validation_data=ds_val,
-            callbacks=[tb_callback, early_stop_callback, ckpt_callback],
+            callbacks=[tb_callback, early_stop_callback, ckpt_callback, reduce_lr],
             verbose=1,
             # steps_per_epoch=20 # FOR TESTING TO MAKE EPOCH SHORTER
         )
@@ -326,7 +337,8 @@ def hparam_search(_):
                                                          num_workers,
                                                          strategy,
                                                          hparams,
-                                                         is_hparam_search=True)
+                                                         is_hparam_search=True,
+                                                         eval_full=False)
 
         for num_lstm_units in HP_NUM_LSTM_UNITS.domain.values:
             for num_dense_units in HP_NUM_DENSE_UNITS.domain.values:
@@ -359,15 +371,16 @@ def run_evaluate(model,
                  num_classes,
                  metrics=[],
                  fp16_run=False,
+                 eval_full=False,
                  with_cm=False):
 
     feat_size = hparams[HP_NUM_MEL_BINS.name] * (hparams[HP_DOWNSAMPLE_FACTOR.name]+1)
         
-    @tf.function(input_signature=[[
-        tf.TensorSpec(shape=[None, None], dtype=tf.float32),
-        tf.TensorSpec(shape=[None], dtype=tf.int64)
-    ]])
-    def eval_step(dist_inputs):
+    # @tf.function(input_signature=[[
+    #     tf.TensorSpec(shape=[None, None], dtype=tf.float32),
+    #     tf.TensorSpec(shape=[None], dtype=tf.int64)
+    # ]])
+    def eval_step_framed(dist_inputs):
         def step_fn(inputs):
             x, y_true = inputs
 
@@ -396,15 +409,73 @@ def run_evaluate(model,
 
         return loss, metrics_results, cm
 
+    # @tf.function(input_signature=[[
+    #     tf.TensorSpec(shape=[None, None, None], dtype=tf.float32),
+    #     tf.TensorSpec(shape=[None], dtype=tf.int64)
+    # ]])
+    def eval_step_full(dist_inputs):
+        def step_fn(inputs):
+            x, y_true = inputs
+
+            # For each segment, run prediction
+            y_pred = None
+            y_pred_comb = None
+            for i in range(tf.shape(x)[0]):
+                y_pred = model(tf.reshape(x[i], [1, tf.shape(x[i])[0]]), training=False)
+                # y_pred /= tf.reduce_max(y_pred)
+                # y_pred_type = y_pred.dtype
+                # y_pred = tf.where(
+                #     # tf.equal(tf.reduce_max(y_pred, axis=1, keepdims=True), y_pred), 
+                #     tf.greater_equal(y_pred, 0.9),
+                #     tf.constant(1, shape=y_pred.shape), 
+                #     tf.constant(0, shape=y_pred.shape)
+                # )
+                # y_pred = tf.cast(y_pred, dtype=y_pred_type)
+                if y_pred_comb == None:
+                    y_pred_comb = y_pred
+                else:
+                    y_pred_comb += y_pred
+            y_pred_comb /= tf.cast(tf.shape(x)[0], dtype=y_pred_comb.dtype)
+
+            # y_pred_comb = model(x, training=False)
+            # y_pred_comb = tf.math.reduce_mean0, keepdims=True)
+            model.reset_states()
+
+            cm = None
+            if with_cm:
+                cm = tf.numpy_function(
+                    calc_confusion_matrix, 
+                    inp=[y_true, y_pred_comb, num_classes, True], 
+                    Tout=tf.int64)
+
+            loss = loss_fn(y_true, y_pred_comb)
+
+            if metrics is not None:
+                metric_results = run_metrics(y_pred=y_pred_comb, y_true=tf.reshape(y_true,[1]),
+                    metrics=metrics, strategy=strategy)
+
+            return loss, metric_results, cm
+
+        loss, metrics_results, cm = strategy.run(step_fn, args=(dist_inputs,))
+        loss = strategy.reduce(
+            tf.distribute.ReduceOp.MEAN, loss, axis=0)
+        metrics_results = {name: strategy.reduce(
+            tf.distribute.ReduceOp.MEAN, result, axis=0) for name, result in metrics_results.items()}
+
+        return loss, metrics_results, cm
+
     print('Performing evaluation.')
 
     loss_object = keras.metrics.Mean()
     metric_objects = {fn.__name__: keras.metrics.Mean() for fn in metrics}
     cm_full = np.zeros(shape=(num_classes, num_classes))
 
-    for batch, inputs in enumerate(eval_dataset):
+    for batch, inputs in enumerate(tqdm(eval_dataset)):
 
-        loss, metrics_results, cm = eval_step(inputs)
+        if eval_full:
+            loss, metrics_results, cm = eval_step_full(inputs)
+        else: 
+            loss, metrics_results, cm = eval_step_framed(inputs)
 
         loss_object(loss)
         for metric_name, metric_result in metrics_results.items():
@@ -422,19 +493,30 @@ def run_evaluate(model,
 
 def test_model(_):
     # Add checkpoint folder
-    checkpoint_dir = "runs/20220308-005619/checkpoints/"
+    checkpoint_dir = "runs/20220319-150103/checkpoints/"
 
     # Init the environment
-    strategy, dtype, num_workers = configure_environment(
-        gpu_names=None,
-        fp16_run=False,
-        multi_strategy=False)
+    # strategy, dtype, num_workers = configure_environment(
+    #     gpu_names=None,
+    #     fp16_run=False,
+    #     multi_strategy=False)
+
+    # Choose device
+    strategy = tf.distribute.OneDeviceStrategy(device="/gpu:0")
+    num_workers = 1
 
     # Init hparams, choose to load from ckpt or config
     hparams, tb_hparams = setup_hparams(
         log_dir=checkpoint_dir+"../"+TB_LOGS_DIR,
         hparam_dir=checkpoint_dir+"../"+TB_LOGS_DIR)
 
+    # Choose batch size
+    batch_size = 1
+    if batch_size:
+        hparams[HP_BATCH_SIZE.name] = batch_size
+
+    # Are we evaluating the full audio seq or not (meaning one segment of max_audio_size per file only)?
+    eval_full = True
     # Load dataset !! CHOOSE DATASET HERE !!
     ds_train, ds_val, ds_test, ds_info = get_dataset("voxceleb",
                                                      VOXCELEB_DIR,
@@ -442,40 +524,42 @@ def test_model(_):
                                                      num_workers,
                                                      strategy,
                                                      hparams,
-                                                     is_hparam_search=False)
+                                                     is_hparam_search=False,
+                                                     eval_full=eval_full)
 
     lr = hparams[HP_LR.name]
-    with strategy.scope():
-        # Get model
-        model = get_model(hparams, ds_info.features['label'].num_classes)
+    # with strategy.scope():
+    # Get model
+    model = get_model(hparams, ds_info.features['label'].num_classes, stateful=eval_full)
 
-        # Load weights if we starting from checkpoint
-        if checkpoint_dir is not None:
-            model.load_weights(checkpoint_dir)
-            logging.info('Restored weights from {}.'.format(checkpoint_dir))
+    # Load weights if we starting from checkpoint
+    if checkpoint_dir is not None:
+        model.load_weights(checkpoint_dir)
+        logging.info('Restored weights from {}.'.format(checkpoint_dir))
 
-        model.compile(
-            optimizer=optimizers.Adam(learning_rate=lr),
-            loss=losses.SparseCategoricalCrossentropy(from_logits=False),  # True if last layer is not softmax
-            metrics=["accuracy", metrics.SparseTopKCategoricalAccuracy(k=5)],
-        )
+    model.compile(
+        optimizer=optimizers.Adam(learning_rate=lr),
+        loss=losses.SparseCategoricalCrossentropy(from_logits=False),  # True if last layer is not softmax
+        metrics=["accuracy", metrics.SparseTopKCategoricalAccuracy(k=5)],
+    )
 
     print("Start testing!")
 
     eval_dataset = ds_test
     eval_metrics = [metrics.sparse_categorical_accuracy, metrics.sparse_top_k_categorical_accuracy]
-    with_cm=True
+    with_cm = False
     eval_res = run_evaluate(
         model, 
         optimizer=optimizers.Adam(learning_rate=lr), 
         loss_fn=losses.sparse_categorical_crossentropy, 
         eval_dataset=eval_dataset, 
-        batch_size=None, 
+        batch_size=batch_size, 
         strategy=strategy,
         hparams=hparams,
         num_classes=ds_info.features['label'].num_classes,
         metrics=eval_metrics, 
         fp16_run=False,
+        eval_full=eval_full,
         with_cm=with_cm)
 
     # Confusion matrix analysis

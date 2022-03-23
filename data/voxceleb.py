@@ -1,5 +1,6 @@
 import numpy as np
 import tensorflow as tf
+import tensorflow.keras.backend as K
 
 # Import datasets
 import tensorflow_datasets as tfds
@@ -35,6 +36,21 @@ def take_random_segment(data, max_audio_length):
 
     return data[rand_start_idx:(rand_start_idx + max_audio_length)]
 
+def split_into_segments(data, max_audio_length):
+    shp = tf.shape(data)
+    # Get max num of segments
+    num_segments = shp[0] // max_audio_length
+    
+    # Get proper set of segments
+    if (num_segments == 0):
+        data = pad_audio(data, max_audio_length)
+        num_segments = 1
+    
+    reshaped = data[0:num_segments*max_audio_length]
+    reshaped = tf.reshape(reshaped, [num_segments, max_audio_length])
+
+    return reshaped
+
 
 def preprocess(data, label, max_audio_length):
     # processed = convert_to_float32(data)
@@ -59,4 +75,10 @@ def preprocess(data, label, max_audio_length):
 
 def preprocess_cast(data, label, max_audio_length):
     processed = convert_to_float32(data)
+    # Uncomment for one hot
+    label = tf.one_hot(label, 1252)
+    return processed, label
+
+def preprocess_eval(data, label, max_audio_length):
+    processed = split_into_segments(data, max_audio_length)
     return processed, label

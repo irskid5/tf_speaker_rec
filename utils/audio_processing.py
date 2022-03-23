@@ -1,4 +1,5 @@
 import tensorflow as tf
+from config import *
 
 
 def pad_audio(audio, min_audio_size):
@@ -22,13 +23,15 @@ def pad_audio(audio, min_audio_size):
     return audio
 
 
-def convert_to_log_mel_spec(sample,
+def convert_to_log_mel_spec(sample, hparams=None,
                             sr=16000.0,
                             num_mel_bins=80,
                             window_size=400,
                             step_size=160,
                             upper_hertz=7600.0,
-                            low_hertz=80.0):
+                            low_hertz=80.0,
+                            fft_length=1024,
+                            ret_mfcc=False):
     """Generate log-mel spectrogram of raw audio sample
 
     Args:
@@ -44,10 +47,20 @@ def convert_to_log_mel_spec(sample,
         [tf.Tensor]: [Normalized log-mel spectrogram]
     """
 
+    if hparams:
+        sr=hparams[HP_SAMPLE_RATE.name]
+        num_mel_bins=hparams[HP_NUM_MEL_BINS.name]
+        window_size=int(hparams[HP_FRAME_LENGTH.name] * sr)
+        step_size=int(hparams[HP_FRAME_STEP.name] * sr)
+        upper_hertz=hparams[HP_UPPER_HERTZ.name]
+        low_hertz=hparams[HP_LOWER_HERTZ.name]
+        fft_length=hparams[HP_FFT_LENGTH.name]
+
     # Perform short-time discrete fourier transform to get spectrograms
     stfts = tf.signal.stft(sample,
                            frame_length=window_size,
-                           frame_step=step_size)
+                           frame_step=step_size,
+                           fft_length=fft_length)
     spec = tf.abs(stfts)
 
     # Get mel spectrograms
@@ -63,21 +76,29 @@ def convert_to_log_mel_spec(sample,
 
     # Get log-mel spectrograms
     log_mel_spec = tf.math.log(mel_spec + 1e-8)
+    features = log_mel_spec
 
-    return log_mel_spec
+    if ret_mfcc:
+        mfccs = tf.signal.mfccs_from_log_mel_spectrograms(log_mel_spec)
+        features = mfccs[:,:,:13]
 
-def convert_to_log_mel_spec_layer(sample,
+    return features
+
+def convert_to_log_mel_spec_layer(sample, 
+                            hparams=None,
                             sr=16000.0,
                             num_mel_bins=80,
                             window_size=400,
                             step_size=160,
                             upper_hertz=7600.0,
-                            low_hertz=80.0):
+                            low_hertz=80.0,
+                            fft_length=1024,
+                            ret_mfcc=False):
     """Generate log-mel spectrogram of raw audio sample
 
     Args:
         sample ([tf.Tensor]): [Raw audio sample]
-        sr (int, optional): [Sample rate]. Defaults to 16000.0.
+        sr (float, optional): [Sample rate]. Defaults to 16000.0.
         num_mel_bins (int, optional): [Number of mel scale bins]. Defaults to 80.
         window_size (int, optional): [Number of samples in 1 window]. Defaults to 400.
         step_size (int, optional): [Number of samples in a stride]. Defaults to 160.
@@ -88,10 +109,20 @@ def convert_to_log_mel_spec_layer(sample,
         [tf.Tensor]: [Normalized log-mel spectrogram]
     """
 
+    if hparams:
+        sr=hparams[HP_SAMPLE_RATE.name]
+        num_mel_bins=hparams[HP_NUM_MEL_BINS.name]
+        window_size=int(hparams[HP_FRAME_LENGTH.name] * sr)
+        step_size=int(hparams[HP_FRAME_STEP.name] * sr)
+        upper_hertz=hparams[HP_UPPER_HERTZ.name]
+        low_hertz=hparams[HP_LOWER_HERTZ.name]
+        fft_length=hparams[HP_FFT_LENGTH.name]
+
     # Perform short-time discrete fourier transform to get spectrograms
     stfts = tf.signal.stft(sample,
                            frame_length=window_size,
-                           frame_step=step_size)
+                           frame_step=step_size,
+                           fft_length=fft_length)
     spec = tf.abs(stfts)
 
     # Get mel spectrograms
@@ -106,10 +137,18 @@ def convert_to_log_mel_spec_layer(sample,
     # Get log-mel spectrograms
     log_mel_spec = tf.math.log(mel_spec + 1e-8)
 
-    # TEST
-    # mfccs = tf.signal.mfccs_from_log_mel_spectrograms(log_mel_spec)
+    # Normalize
+    # means = tf.math.reduce_mean(log_mel_spec, 1, keepdims=True)
+    # stddevs = tf.math.reduce_std(log_mel_spec, 1, keepdims=True)
+    # log_mel_spec = (log_mel_spec - means) / (stddevs + 1e-10)
 
-    return log_mel_spec
+    features = log_mel_spec
+
+    if ret_mfcc:
+        mfccs = tf.signal.mfccs_from_log_mel_spectrograms(log_mel_spec)
+        features = mfccs[:,:,:13]
+
+    return features
 
 
 def normalize_log_mel(log_mel_spec):
@@ -125,7 +164,7 @@ def normalize_log_mel_layer(log_mel_spec):
     return normalized
 
 
-def group_and_downsample_spec(mel_spec, n=3, stack_size=4):
+def group_and_downsample_spec(mel_spec, hparams=None, n=3, stack_size=4):
     """Downsamples log-mel spectrogram by n with a stride.
 
     Group features into stack_size every n timesteps.
@@ -139,6 +178,10 @@ def group_and_downsample_spec(mel_spec, n=3, stack_size=4):
         [tf.Tensor]: [Downsampled log-mel spectrogram]
     """
     spec_length = tf.shape(mel_spec)[0]
+
+    if hparams:
+        n=hparams[HP_DOWNSAMPLE_FACTOR.name]
+        stack_size=hparams[HP_STACK_SIZE.name]
 
     # Trim input to get equal sized groups for every n timesteps
     trimmed_length = spec_length - tf.math.mod(spec_length - stack_size, n)
@@ -155,7 +198,7 @@ def group_and_downsample_spec(mel_spec, n=3, stack_size=4):
     return downsampled
 
 
-def group_and_downsample_spec_v2(mel_spec, n=3, stack_size=4):
+def group_and_downsample_spec_v2(mel_spec, hparams=None, n=3, stack_size=4):
     """Downsamples log-mel spectrogram by n with a stride.
 
     Group features into stack_size every n timesteps.
@@ -168,6 +211,10 @@ def group_and_downsample_spec_v2(mel_spec, n=3, stack_size=4):
     Returns:
         [tf.Tensor]: [Downsampled log-mel spectrogram]
     """
+
+    if hparams:
+        n=hparams[HP_DOWNSAMPLE_FACTOR.name]
+        stack_size=hparams[HP_STACK_SIZE.name]
 
     feat_length = tf.shape(mel_spec)[-1]
     downsampled = tf.signal.frame(mel_spec, stack_size, n, pad_end=False, axis=0)  # group
@@ -175,7 +222,7 @@ def group_and_downsample_spec_v2(mel_spec, n=3, stack_size=4):
 
     return downsampled
 
-def group_and_downsample_spec_v2_layer(mel_spec, n=3, stack_size=4):
+def group_and_downsample_spec_v2_layer(mel_spec, hparams=None, n=3, stack_size=4):
     """Downsamples log-mel spectrogram by n with a stride.
 
     Group features into stack_size every n timesteps.
@@ -188,6 +235,10 @@ def group_and_downsample_spec_v2_layer(mel_spec, n=3, stack_size=4):
     Returns:
         [tf.Tensor]: [Downsampled log-mel spectrogram]
     """
+
+    if hparams:
+        n=hparams[HP_DOWNSAMPLE_FACTOR.name]
+        stack_size=hparams[HP_STACK_SIZE.name]
 
     feat_length = tf.shape(mel_spec)[-1]
     downsampled = tf.signal.frame(mel_spec, stack_size, n, pad_end=False, axis=1)  # group

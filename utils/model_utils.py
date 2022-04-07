@@ -1,6 +1,24 @@
 import tensorflow as tf
-from tensorflow.keras import layers
+from tensorflow.keras import layers, optimizers
 import tensorflow.keras.backend as K
+import math
+
+"""
+The lr scheduler from "Attention is all you need"
+"""
+class AttentionLRScheduler(optimizers.schedules.LearningRateSchedule):
+
+    def __init__(self, warmup_steps, output_depth):
+        self.warmup_steps = warmup_steps
+        self.output_depth = output_depth
+
+    def __call__(self, step):
+        step = tf.cast(step, dtype=tf.float32)
+        one = 1 / tf.sqrt(tf.constant(self.output_depth, dtype=tf.float32))
+        two = 1 / tf.sqrt(step + 1)
+        three = (step + 1) / tf.sqrt(tf.pow(tf.constant(self.warmup_steps, dtype=tf.float32), tf.constant(3, dtype=tf.float32))) 
+        cur_lr = one * tf.minimum(two, three)
+        return cur_lr
 
 
 class TimeReduction(layers.Layer):
@@ -49,6 +67,75 @@ class TimeReduction(layers.Layer):
         config.update({
             "reduction_factor": self.reduction_factor,
             "batch_size": self.batch_size,
+        })
+        return config
+
+def SelfAttentionMechanismFn(num_hops, hidden_size, inputs):
+
+    shp = K.int_shape(inputs)
+    T = shp[1]
+    n_h = shp[2]
+    n_c = hidden_size
+    n_k = num_hops
+
+    #matmul1
+    sa_matmul1 = layers.Dense(n_c, activation="tanh", use_bias=False)(inputs)
+    
+    # matmul2
+    sa_matmul2 = layers.Dense(n_k, activation="sigmoid", use_bias=False)(sa_matmul1)
+    
+    # transpose
+    sa_trans = layers.Lambda(lambda x: tf.transpose(x, perm=[0, 2, 1]))(sa_matmul2)
+    
+    # matmul3
+    sa_matmul3 = layers.Dot(axes=[2,1])([sa_trans, inputs])
+
+    return sa_matmul3
+
+
+class SelfAttentionMechanism(layers.Layer):
+    def __init__(self,
+                 num_hops,
+                 hidden_size,
+                 **kwargs):
+
+        super(SelfAttentionMechanism, self).__init__(**kwargs)
+
+        self.num_hops = num_hops
+        self.hidden_size = hidden_size
+
+    def compute_output_shape(self, input_shape):
+        return [input_shape[0], self.num_hops, self.hidden_size]
+
+    def call(self, inputs):
+
+        # TODO: Switch out layers for actual variables and matmuls
+
+        shp = K.int_shape(inputs)
+        T = shp[1]
+        n_h = shp[2]
+        n_c = self.hidden_size
+        n_k = self.num_hops
+
+        #matmul1
+        sa_matmul1 = layers.Dense(n_c, activation="tanh", use_bias=False, name="matmul1_sa")(inputs)
+        
+        # matmul2
+        sa_matmul2 = layers.Dense(n_k, activation="softmax", use_bias=False, name="matmul2_sa")(sa_matmul1)
+        
+        # transpose
+        sa_trans = layers.Lambda(lambda x: tf.transpose(x, perm=[0, 2, 1]), name="transpose_sa")(sa_matmul2)
+        
+        # matmul3
+        sa_matmul3 = layers.Dot(axes=[2,1], name="matmul3_sa")([sa_trans, inputs])
+
+        return sa_matmul3
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "num_hops": self.num_hops,
+            "hidden_size": self.hidden_size,
         })
         return config
 

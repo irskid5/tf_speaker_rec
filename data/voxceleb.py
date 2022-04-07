@@ -22,8 +22,8 @@ DOWNSAMPLE_FACTOR = HP_DOWNSAMPLE_FACTOR.domain.values[0]
 STACK_SIZE = HP_STACK_SIZE.domain.values[0]
 
 
-def convert_to_float32(data):
-    return tf.cast(data, dtype=tf.float32)
+def cast(data, dtype):
+    return tf.cast(data, dtype=dtype)
 
 
 def take_random_segment(data, max_audio_length):
@@ -52,7 +52,7 @@ def split_into_segments(data, max_audio_length):
     return reshaped
 
 
-def preprocess(data, label, max_audio_length):
+def preprocess(data, label, max_audio_length, dtype):
     # processed = convert_to_float32(data)
     processed = pad_audio(data, max_audio_length)
     processed = take_random_segment(processed, max_audio_length)
@@ -73,12 +73,12 @@ def preprocess(data, label, max_audio_length):
     return processed, label
 
 
-def preprocess_cast(data, label, max_audio_length):
-    processed = convert_to_float32(data)
+def preprocess_cast(data, label, max_audio_length, dtype):
+    processed = cast(data, dtype)
     # Uncomment for one hot
-    label = tf.one_hot(label, 1252)
+    label = tf.one_hot(label-1, 1251)
     return processed, label
 
-def preprocess_eval(data, label, max_audio_length):
+def preprocess_eval(data, label, max_audio_length, dtype):
     processed = split_into_segments(data, max_audio_length)
     return processed, label

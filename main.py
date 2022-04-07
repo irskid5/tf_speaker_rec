@@ -11,11 +11,7 @@ tf.config.optimizer.set_jit(True)
 import tensorflow_addons as tfa
 from tensorflow import keras
 from keras.utils import losses_utils
-from tensorflow.keras import layers
-from tensorflow.keras import models
-from tensorflow.keras import optimizers
-from tensorflow.keras import losses
-from tensorflow.keras import metrics
+from tensorflow.keras import layers, models, optimizers, losses, metrics, mixed_precision
 import numpy as np
 import matplotlib.pyplot as plt
 import sklearn.metrics
@@ -47,11 +43,11 @@ def configure_environment(gpu_names, fp16_run=False, multi_strategy=False):
     dtype = tf.float32
 
     # ----------------- TO IMPLEMENT -------------------------
-    # if fp16_run:
-    #     print('Using 16-bit float precision.')
-    #     policy = mixed_precision.Policy('mixed_float16')
-    #     mixed_precision.set_policy(policy)
-    #     dtype = tf.float16
+    if fp16_run:
+        print('Using 16-bit float precision.')
+        policy = mixed_precision.Policy('mixed_float16')
+        mixed_precision.set_global_policy(policy)
+        # dtype = tf.float16
     # --------------------------------------------------------
 
     # Get GPU info
@@ -191,12 +187,13 @@ def main(_):
                                                      strategy,
                                                      hparams,
                                                      is_hparam_search=False,
-                                                     eval_full=False)
+                                                     eval_full=False,
+                                                     dtype=dtype)
     # init training
     lr = hparams[HP_LR.name]
     with strategy.scope():
         # Get model
-        model = get_model(hparams, ds_info.features['label'].num_classes, stateful=False)
+        model = get_model(hparams, ds_info.features['label'].num_classes-1, stateful=False, dtype=dtype)
 
         # Load weights if we starting from checkpoint
         if checkpoint_dir is not None:
@@ -206,8 +203,8 @@ def main(_):
         save_hparams(hparams, RUN_DIR+TB_LOGS_DIR)
 
         model.compile(
-            optimizer=optimizers.Adam(learning_rate=lr),
-            loss=losses.CategoricalCrossentropy(from_logits=False, reduction=losses_utils.ReductionV2.AUTO),  # True if last layer is not softmax
+            optimizer=optimizers.Adam(learning_rate=AttentionLRScheduler(2000, 128)),
+            loss=tfa.losses.SigmoidFocalCrossEntropy(from_logits=False, reduction=losses.Reduction.SUM),  # True if last layer is not softmax
             metrics=[metrics.CategoricalAccuracy(), metrics.TopKCategoricalAccuracy(k=5)],
         )
 
@@ -227,33 +224,11 @@ def main(_):
     # fault_tol_callback = tf.keras.callbacks.experimental.BackupAndRestore(backup_dir=(RUN_DIR + BACKUP_DIR))
 
     early_stop_callback = keras.callbacks.EarlyStopping(
-        monitor='val_categorical_accuracy', min_delta=0.0001, patience=4, verbose=1
+        monitor='val_categorical_accuracy', min_delta=0.0001, patience=3, verbose=1
     )
 
     reduce_lr = keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.2,
-                              patience=2, min_lr=0.0001)
-
-    # file_writer_cm = tf.summary.create_file_writer(RUN_DIR + TB_LOGS_DIR + "image/cm/")
-    # def log_confusion_matrix(epoch, logs):
-    #     # Get ds
-    #     y_true = np.concatenate([y for x, y in ds_val], axis=0)
-
-    #     # Use the model to predict the values.
-    #     y_pred_raw = model.predict(ds_val)
-        
-    #     y_pred = np.argmax(y_pred_raw, axis=-1)
-    #     y_true = np.concatenate([y for x, y in ds_val], axis=0)
-        
-    #     # Calculate the confusion matrix using sklearn.metrics
-    #     cm = sklearn.metrics.confusion_matrix(y_pred, y_pred)
-        
-    #     figure = plot_confusion_matrix(cm, class_names=np.arange(0, ds_info.features['label'].num_classes, 1))
-    #     cm_image = plot_to_image(figure)
-        
-    #     # Log the confusion matrix as an image summary.
-    #     with file_writer_cm.as_default():
-    #         tf.summary.image("Confusion Matrix", cm_image, step=epoch)
-    # cm_callback = keras.callbacks.LambdaCallback(on_epoch_end=log_confusion_matrix) 
+                              patience=4, min_lr=0.0001)
 
     # Train
     num_epochs = hparams[HP_NUM_EPOCHS.name]
@@ -262,7 +237,7 @@ def main(_):
             ds_train,
             epochs=num_epochs,
             validation_data=ds_val,
-            callbacks=[tb_callback, early_stop_callback, ckpt_callback, reduce_lr],
+            callbacks=[tb_callback, ckpt_callback, early_stop_callback],
             verbose=1,
             # steps_per_epoch=20 # FOR TESTING TO MAKE EPOCH SHORTER
         )
@@ -282,7 +257,7 @@ def hparam_search(_):
         # Init training
         with strategy.scope():
             # Get model
-            model = get_model(current_hparams, ds_info.features['label'].num_classes)
+            model = get_model(current_hparams, ds_info.features['label'].num_classes-1)
             model.compile(
                 optimizer=keras.optimizers.Adam(learning_rate=current_hparams[HP_LR.name]),
                 loss=keras.losses.SparseCategoricalCrossentropy(from_logits=False),  # True if last layer is not softmax
@@ -338,7 +313,8 @@ def hparam_search(_):
                                                          strategy,
                                                          hparams,
                                                          is_hparam_search=True,
-                                                         eval_full=False)
+                                                         eval_full=False,
+                                                         dtype=dtype)
 
         for num_lstm_units in HP_NUM_LSTM_UNITS.domain.values:
             for num_dense_units in HP_NUM_DENSE_UNITS.domain.values:
@@ -384,7 +360,7 @@ def run_evaluate(model,
         def step_fn(inputs):
             x, y_true = inputs
 
-            y_pred = model(x, training=False)
+            y_pred, encode, final_memory_state, final_carry_state = model(x, training=False)
 
             cm = None
             if with_cm:
@@ -493,7 +469,10 @@ def run_evaluate(model,
 
 def test_model(_):
     # Add checkpoint folder
-    checkpoint_dir = "runs/20220319-150103/checkpoints/"
+    checkpoint_dir = "runs/20220328-014222/checkpoints/"
+
+    # Do we run eagerly for debugging? By default, we don't. Set "True" for here on.
+    tf.config.run_functions_eagerly(True)
 
     # Init the environment
     # strategy, dtype, num_workers = configure_environment(
@@ -504,6 +483,7 @@ def test_model(_):
     # Choose device
     strategy = tf.distribute.OneDeviceStrategy(device="/gpu:0")
     num_workers = 1
+    dtype = tf.float32
 
     # Init hparams, choose to load from ckpt or config
     hparams, tb_hparams = setup_hparams(
@@ -511,12 +491,12 @@ def test_model(_):
         hparam_dir=checkpoint_dir+"../"+TB_LOGS_DIR)
 
     # Choose batch size
-    batch_size = 1
+    batch_size = None
     if batch_size:
         hparams[HP_BATCH_SIZE.name] = batch_size
 
     # Are we evaluating the full audio seq or not (meaning one segment of max_audio_size per file only)?
-    eval_full = True
+    eval_full = False
     # Load dataset !! CHOOSE DATASET HERE !!
     ds_train, ds_val, ds_test, ds_info = get_dataset("voxceleb",
                                                      VOXCELEB_DIR,
@@ -525,12 +505,13 @@ def test_model(_):
                                                      strategy,
                                                      hparams,
                                                      is_hparam_search=False,
-                                                     eval_full=eval_full)
+                                                     eval_full=eval_full,
+                                                     dtype=dtype)
 
     lr = hparams[HP_LR.name]
     # with strategy.scope():
     # Get model
-    model = get_model(hparams, ds_info.features['label'].num_classes, stateful=eval_full)
+    model = get_model(hparams, ds_info.features['label'].num_classes-1, stateful=eval_full)
 
     # Load weights if we starting from checkpoint
     if checkpoint_dir is not None:
@@ -539,24 +520,26 @@ def test_model(_):
 
     model.compile(
         optimizer=optimizers.Adam(learning_rate=lr),
-        loss=losses.SparseCategoricalCrossentropy(from_logits=False),  # True if last layer is not softmax
-        metrics=["accuracy", metrics.SparseTopKCategoricalAccuracy(k=5)],
+        loss=tfa.losses.SigmoidFocalCrossEntropy(from_logits=False, reduction=losses.Reduction.SUM),  # True if last layer is not softmax
+        metrics=[metrics.CategoricalAccuracy(), metrics.TopKCategoricalAccuracy(k=5)],
+        run_eagerly=True
     )
+    # model.run_eagerly = True
 
     print("Start testing!")
 
     eval_dataset = ds_test
-    eval_metrics = [metrics.sparse_categorical_accuracy, metrics.sparse_top_k_categorical_accuracy]
+    eval_metrics = [metrics.categorical_accuracy, metrics.top_k_categorical_accuracy]
     with_cm = False
     eval_res = run_evaluate(
         model, 
         optimizer=optimizers.Adam(learning_rate=lr), 
-        loss_fn=losses.sparse_categorical_crossentropy, 
+        loss_fn=tfa.losses.sigmoid_focal_crossentropy, 
         eval_dataset=eval_dataset, 
         batch_size=batch_size, 
         strategy=strategy,
         hparams=hparams,
-        num_classes=ds_info.features['label'].num_classes,
+        num_classes=ds_info.features['label'].num_classes-1,
         metrics=eval_metrics, 
         fp16_run=False,
         eval_full=eval_full,
@@ -566,12 +549,13 @@ def test_model(_):
     if with_cm:
         print("Confusion Matrix selected")
         print("Saving Confusion Matrix")
+        run_date = checkpoint_dir.split('/')[1]
         cm_dict = {idx: {i: int(v) for i, v in enumerate(val)} for idx, val in enumerate(eval_res['cm'])}
         cm = ConfusionMatrix(matrix=cm_dict)
         print("Saving CSV")
-        cm.save_csv("cm")
+        cm.save_csv("cm_"+run_date)
         print("Saving Stat")
-        cm.save_stat("cm")
+        cm.save_stat("cm_stats_"+run_date)
         eval_res.pop('cm', None)
 
     # Show final results
@@ -582,6 +566,7 @@ def test_model(_):
 
 
 if __name__ == '__main__':
+    # tf.config.run_functions_eagerly(False)
     app.run(main)
     # app.run(hparam_search)
     # app.run(test_model)

@@ -4,7 +4,7 @@ from tensorboard.plugins.hparams import api as hp
 
 # ----------------------------- General ------------------------------------
 HP_SEED = hp.HParam('seed', hp.Discrete([1997]))  # for experimental reproducibility
-RUNS_DIR = "runs/"
+RUNS_DIR = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/"
 TB_LOGS_DIR = "logs/tensorboard/"
 CKPT_DIR = "checkpoints/"
 BACKUP_DIR = "tmp/backup"
@@ -21,7 +21,7 @@ HP_SHUFFLE_BUFFER_SIZE = hp.HParam('shuffle_buffer_size', hp.Discrete([32000])) 
 # Data selection
 # Note: determines the maximum number of frames extracted from each utterance
 #       for training
-# HP_MAX_NUM_FRAMES = hp.HParam('max_num_frames', hp.Discrete([202, 301, 103]))
+# HP_MAX_NUM_FRAMES = hp.HParam('max_num_frames', hp.Discrete([300, 400]))
 HP_MAX_NUM_FRAMES = hp.HParam('max_num_frames', hp.Discrete([400]))
 
 # Log-mel spectrograms
@@ -38,10 +38,15 @@ HP_STACK_SIZE = hp.HParam('stack_size', hp.Discrete([4]))
 
 # -------------------------------- Model -----------------------------------
 
-# HP_NUM_LSTM_UNITS = hp.HParam('num_lstm_units', hp.Discrete([128, 256, 512, 1024, 2048]))
-HP_NUM_LSTM_UNITS = hp.HParam('num_lstm_units', hp.Discrete([128]))
-# HP_NUM_DENSE_UNITS = hp.HParam('num_dense_units', hp.Discrete([128, 256, 512, 1024, 2048]))
-HP_NUM_DENSE_UNITS = hp.HParam('num_dense_units', hp.Discrete([1024]))
+# LSTM encoding layer
+HP_NUM_LSTM_UNITS = hp.HParam('num_lstm_units', hp.Discrete([256]))
+
+# Attention aggregation layer
+HP_NUM_SELF_ATT_UNITS = hp.HParam('num_self_att_units', hp.Discrete([512]))
+HP_NUM_SELF_ATT_HOPS = hp.HParam('num_self_att_hops', hp.Discrete([1]))
+
+# Penultimate classification dense layers
+HP_NUM_DENSE_UNITS = hp.HParam('num_dense_units', hp.Discrete([2048]))
 
 # ------------------------------- Training ---------------------------------
 
@@ -57,9 +62,9 @@ METRIC_TRAIN_ACCURACY = 'train_accuracy'
 METRIC_EVAL_LOSS = 'eval_loss'
 METRIC_EVAL_ACCURACY = 'eval_accuracy'
 METRIC_EVAL_EER = 'eval_eer'
-METRIC_ACCURACY = 'accuracy'
-METRIC_EER = 'eer'
-
+METRIC_ACCURACY = 'categorical_accuracy'
+METRIC_TOP_K_ACCURACY = 'top_k_categorical_accuracy'
+METRIC_LOSS = 'sigmoid_focal_crossentropy'
 
 # Helper functions
 

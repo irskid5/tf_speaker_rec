@@ -1,7 +1,8 @@
 from numpy import concatenate
+from operator import not_
 import tensorflow as tf
 import tensorflow.keras as keras
-from keras import layers, models, activations
+from keras import layers, models, activations, initializers, regularizers
 import tensorflow.keras.backend as K
 
 from data.voxceleb import *
@@ -9,16 +10,16 @@ from config import *
 from utils.model_utils import *
 
 
-def get_model(hparams, num_classes, stateful=False, dtype=tf.float32):
+def get_model(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
     # CHOOSE MODEL -----------------------------------------------
-    model = speaker_rec_model_att_like(hparams, num_classes, stateful, dtype)
+    model = speaker_rec_model_att_like(hparams, num_classes, stateful, dtype, inference)
     # ------------------------------------------------------------
 
     model.summary()
     return model
 
 
-def speaker_rec_model(hparams, num_classes, stateful=False, dtype=tf.float32):
+def speaker_rec_model(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
     # Preprocessing parameters
     SAMPLE_RATE = hparams[HP_SAMPLE_RATE.name]
     FRAME_LENGTH = int(hparams[HP_FRAME_LENGTH.name] * SAMPLE_RATE)
@@ -71,7 +72,7 @@ def speaker_rec_model(hparams, num_classes, stateful=False, dtype=tf.float32):
     return model
 
 
-def speaker_rec_model_multidimLSTM(hparams, num_classes, stateful=False, dtype=tf.float32):
+def speaker_rec_model_multidimLSTM(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
     # Preprocessing parameters
     SAMPLE_RATE = hparams[HP_SAMPLE_RATE.name]
     FRAME_LENGTH = int(hparams[HP_FRAME_LENGTH.name] * SAMPLE_RATE)
@@ -140,7 +141,97 @@ def speaker_rec_model_multidimLSTM(hparams, num_classes, stateful=False, dtype=t
     return model
 
 
-def speaker_rec_model_att_like(hparams, num_classes, stateful=False, dtype=tf.float32):
+def speaker_rec_model_att_like(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
+    # Preprocessing parameters
+    SAMPLE_RATE = hparams[HP_SAMPLE_RATE.name]
+    FRAME_LENGTH = int(hparams[HP_FRAME_LENGTH.name] * SAMPLE_RATE)
+    FRAME_STEP = int(hparams[HP_FRAME_STEP.name] * SAMPLE_RATE)
+    MAX_AUDIO_LENGTH = hparams[HP_MAX_NUM_FRAMES.name] * FRAME_STEP + FRAME_LENGTH - FRAME_STEP
+    # NUM_MEL_BINS = hparams[HP_NUM_MEL_BINS.name]
+
+    # Model parameters
+    num_lstm_units = hparams[HP_NUM_LSTM_UNITS.name]
+    num_self_att_units = hparams[HP_NUM_SELF_ATT_UNITS.name]
+    num_self_att_hops = hparams[HP_NUM_SELF_ATT_HOPS.name]
+    num_dense_units = hparams[HP_NUM_DENSE_UNITS.name]
+
+    batch_size = None
+    if stateful:
+        batch_size = 1
+
+    input_shape = [None] # if inference else [MAX_AUDIO_LENGTH]
+
+    # Define model
+    # Preprocessing layers (for on device) -------------------------------------------------
+    input = keras.Input(
+        shape=input_shape, 
+        batch_size=batch_size, 
+        dtype=dtype, 
+        name='PREPROCESS_INPUT')
+    encode_in = layers.Lambda(
+        lambda x: convert_to_log_mel_spec_layer(x, hparams=hparams, normalize=True), 
+        trainable=False, 
+        dtype=dtype, 
+        name="LOG_MEL_SPEC")(input)
+    encode_in = layers.Lambda(
+        lambda x: group_and_downsample_spec_v2_layer(x, hparams=hparams), 
+        trainable=False, 
+        dtype=dtype, 
+        name="DOWNSAMPLE")(encode_in)
+    # ---------------------------------------------------------------------------------------
+
+    # Trainable layers ----------------------------------------------------------------------
+    # Note: the inference flag is in the NORMALIZE layer if Layer Normalization used in training since it attaches parameters to fixed time length
+    # and in inference, we want variable time
+    # encode_in = layers.LayerNormalization(axis=-2, name="NORMALIZE", trainable=False, center=not_(inference), scale=not_(inference))(encode_in)
+
+    encode = layers.LSTM(
+        num_lstm_units, 
+        return_sequences=True, 
+        stateful=stateful,
+        kernel_regularizer=regularizers.L2(l2=0.0001),
+        recurrent_regularizer=regularizers.L2(l2=0.0001),
+        name="LSTM_0")(encode_in)
+    # encode_in = layers.Dense(num_lstm_units, activation="tanh", kernel_regularizer=regularizers.L2(l2=0.0001))(encode_in)
+    # encode = layers.Add()([encode, encode_in])
+    encode = TimeReduction(reduction_factor=2, batch_size=batch_size, name="TIME_REDUCTION_E")(encode)
+    encode = layers.LSTM(
+        num_lstm_units, 
+        return_sequences=True, 
+        stateful=stateful, 
+        kernel_regularizer=regularizers.L2(l2=0.0001),
+        recurrent_regularizer=regularizers.L2(l2=0.0001),
+        name="LSTM_1")(encode)
+
+    # SA Layer
+    sa_output = SelfAttentionMechanismFn(
+        num_self_att_hops, 
+        num_self_att_units, 
+        encode, 
+        name="SA_0")
+
+    output_proj = layers.Dense(num_dense_units, kernel_regularizer=regularizers.L2(l2=0.0001), activation="sigmoid", name="DENSE_0")(sa_output)
+
+    # TEST LAYER FOR LINEAR SEPARABILITY
+    # output_proj = layers.Dense(2, activation="relu", name="TEST_PROJECTION")(output_proj)
+
+    # Output logits layers
+    output = layers.Dense(num_classes, activation=None, kernel_regularizer=regularizers.L2(l2=0.0001), name="DENSE_OUT")(output_proj)
+    
+    # Output activation layer
+    # output = layers.Activation(activation="sigmoid", name="SIGMOID_OUT")(output)
+    # output = layers.Softmax(name="SOFTMAX_OUT", dtype=dtype)(output)
+    # ---------------------------------------------------------------------------------------
+
+    # Put model together
+    model = keras.Model(inputs=[input],
+                        outputs=[output, output_proj], name="speaker_rec_model_att_like")
+
+    
+    return model
+
+
+def speaker_rec_model_att_like_simpleRNN(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
     # Preprocessing parameters
     SAMPLE_RATE = hparams[HP_SAMPLE_RATE.name]
     FRAME_LENGTH = int(hparams[HP_FRAME_LENGTH.name] * SAMPLE_RATE)
@@ -175,16 +266,24 @@ def speaker_rec_model_att_like(hparams, num_classes, stateful=False, dtype=tf.fl
     # output = layers.Dropout(0.2)(output)
     # output = layers.Conv1D(128, 3, strides=2 ,activation="relu", use_bias=True)(output)
     # output = layers.AveragePooling1D(pool_size=2, strides=2)(output)
-    focus = SelfAttentionMechanismFn(1, num_dense_units, encode_in)
-    focus = tf.repeat(focus, tf.shape(encode_in)[1], 1)
-    focus = layers.Reshape([133, 320])(focus)
-    encode_in = layers.Add()([encode_in, focus])
-    encode_in = layers.LayerNormalization(axis=-2)(encode_in)
+    # focus = SelfAttentionMechanismFn(1, num_dense_units, encode_in)
+    # focus = tf.repeat(focus, tf.shape(encode_in)[1], 1)
+    # focus = layers.Reshape([133, 320])(focus)
+    # encode_in = layers.Add()([encode_in, focus])
+    # encode_in = layers.LayerNormalization(axis=-2)(encode_in)
     # output = layers.Concatenate(axis=-1, name="ADD_FOCUS")([output, focus])
-    encode = layers.LSTM(num_lstm_units, return_sequences=True, name="LSTM_0", stateful=stateful)(encode_in)
+    # encode = layers.LSTM(num_lstm_units, return_sequences=True, name="LSTM_0", stateful=stateful)(encode_in)
+    encode = layers.SimpleRNN(num_lstm_units, recurrent_initializer=initializers.Identity(gain=0.01), activation="relu", return_sequences=True, name="RNN_0", stateful=stateful)(encode_in)
+    encode = layers.SimpleRNN(num_lstm_units, recurrent_initializer=initializers.Identity(gain=0.01), activation="relu", return_sequences=True, name="RNN_1", stateful=stateful)(encode)
+    encode = layers.SimpleRNN(num_lstm_units, recurrent_initializer=initializers.Identity(gain=0.01), activation="relu", return_sequences=True, name="RNN_2", stateful=stateful)(encode)
+    encode = layers.SimpleRNN(num_lstm_units, recurrent_initializer=initializers.Identity(gain=0.01), activation="relu", return_sequences=True, name="RNN_3", stateful=stateful)(encode)
     encode = TimeReduction(reduction_factor=2, batch_size=None, name="TIME_REDUCTION_E")(encode)
     # output = layers.Dropout(0.2)(output)
-    encode, final_memory_state, final_carry_state = layers.LSTM(num_lstm_units, return_sequences=True, name="LSTM_1", stateful=stateful, return_state=True)(encode)
+    # encode, final_memory_state, final_carry_state = layers.LSTM(num_lstm_units, return_sequences=True, name="LSTM_1", stateful=stateful, return_state=True)(encode)
+    encode = layers.SimpleRNN(num_lstm_units, recurrent_initializer=initializers.Identity(gain=0.01), activation="relu", return_sequences=True, name="RNN_4", stateful=stateful)(encode)
+    encode = layers.SimpleRNN(num_lstm_units, recurrent_initializer=initializers.Identity(gain=0.01), activation="relu", return_sequences=True, name="RNN_5", stateful=stateful)(encode)
+    encode = layers.SimpleRNN(num_lstm_units, recurrent_initializer=initializers.Identity(gain=0.01), activation="relu", return_sequences=True, name="RNN_6", stateful=stateful)(encode)
+    encode, final_memory_state = layers.SimpleRNN(num_lstm_units, recurrent_initializer=initializers.Identity(gain=0.01), activation="relu", return_sequences=True, name="RNN_7", stateful=stateful, return_state=True)(encode)
 
     # Attention layer (try across ts)
     # Let query be last ts output from encode
@@ -227,11 +326,11 @@ def speaker_rec_model_att_like(hparams, num_classes, stateful=False, dtype=tf.fl
 
     # Put model together
     model = keras.Model(inputs=[input],
-                        outputs=[output], name="speaker_rec_model_att_like")
+                        outputs=[output], name="speaker_rec_model_att_like_simpleRNN")
     return model
 
 
-def speaker_rec_model_rnnt_like(hparams, num_classes, stateful=False, dtype=tf.float32):
+def speaker_rec_model_rnnt_like(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
     # Preprocessing parameters
     SAMPLE_RATE = hparams[HP_SAMPLE_RATE.name]
     FRAME_LENGTH = int(hparams[HP_FRAME_LENGTH.name] * SAMPLE_RATE)
@@ -299,7 +398,7 @@ def speaker_rec_model_rnnt_like(hparams, num_classes, stateful=False, dtype=tf.f
     return model
 
 
-def fc_model(hparams, num_classes, stateful=False, dtype=tf.float32):
+def fc_model(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
     # Preprocessing parameters
     SAMPLE_RATE = hparams[HP_SAMPLE_RATE.name]
     FRAME_LENGTH = int(hparams[HP_FRAME_LENGTH.name] * SAMPLE_RATE)
@@ -353,7 +452,7 @@ def fc_model(hparams, num_classes, stateful=False, dtype=tf.float32):
     return model
 
 
-def vgg_m(hparams, num_classes, stateful=False, dtype=tf.float32):
+def vgg_m(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
     # Preprocessing parameters
     SAMPLE_RATE = hparams[HP_SAMPLE_RATE.name]
     FRAME_LENGTH = int(hparams[HP_FRAME_LENGTH.name] * SAMPLE_RATE)
@@ -418,7 +517,7 @@ def vgg_m(hparams, num_classes, stateful=False, dtype=tf.float32):
     return model
 
 
-def speaker_rec_model_w_pooling(hparams, num_classes, stateful=False, dtype=tf.float32):
+def speaker_rec_model_w_pooling(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
     # Preprocessing parameters
     SAMPLE_RATE = hparams[HP_SAMPLE_RATE.name]
     FRAME_LENGTH = int(hparams[HP_FRAME_LENGTH.name] * SAMPLE_RATE)
@@ -475,7 +574,7 @@ def speaker_rec_model_w_pooling(hparams, num_classes, stateful=False, dtype=tf.f
     return model
 
 
-def speaker_rec_model_convlstm(hparams, num_classes, stateful=False, dtype=tf.float32):
+def speaker_rec_model_convlstm(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
     # DOESNT WORK !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     # Preprocessing parameters
     SAMPLE_RATE = hparams[HP_SAMPLE_RATE.name]
@@ -530,7 +629,7 @@ def speaker_rec_model_convlstm(hparams, num_classes, stateful=False, dtype=tf.fl
 
 
 # VGGVox verification model
-def vggvox_model(hparams, num_classes, stateful=False, dtype=tf.float32):
+def vggvox_model(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
 	# Preprocessing parameters
     SAMPLE_RATE = hparams[HP_SAMPLE_RATE.name]
     FRAME_LENGTH = int(hparams[HP_FRAME_LENGTH.name] * SAMPLE_RATE)
@@ -576,7 +675,7 @@ def vggvox_model(hparams, num_classes, stateful=False, dtype=tf.float32):
     m = keras.Model(input, output, name='VGGVox')
     return m
 
-def vgg_nang_et_al(hparams, num_classes, stateful=False, dtype=tf.float32):
+def vgg_nang_et_al(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
     # Preprocessing parameters
     SAMPLE_RATE = hparams[HP_SAMPLE_RATE.name]
     FRAME_LENGTH = int(hparams[HP_FRAME_LENGTH.name] * SAMPLE_RATE)

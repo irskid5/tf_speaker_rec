@@ -93,7 +93,8 @@ def convert_to_log_mel_spec_layer(sample,
                             upper_hertz=7600.0,
                             low_hertz=80.0,
                             fft_length=1024,
-                            ret_mfcc=False):
+                            ret_mfcc=False,
+                            normalize=False):
     """Generate log-mel spectrogram of raw audio sample
 
     Args:
@@ -122,7 +123,8 @@ def convert_to_log_mel_spec_layer(sample,
     stfts = tf.signal.stft(sample,
                            frame_length=window_size,
                            frame_step=step_size,
-                           fft_length=fft_length)
+                           fft_length=fft_length,
+                           pad_end=True)
     spec = tf.abs(stfts)
 
     # Get mel spectrograms
@@ -138,9 +140,10 @@ def convert_to_log_mel_spec_layer(sample,
     log_mel_spec = tf.math.log(mel_spec + 1e-8)
 
     # Normalize
-    # means = tf.math.reduce_mean(log_mel_spec, 1, keepdims=True)
-    # stddevs = tf.math.reduce_std(log_mel_spec, 1, keepdims=True)
-    # log_mel_spec = (log_mel_spec - means) / (stddevs + 1e-10)
+    if normalize:
+        means = tf.math.reduce_mean(log_mel_spec, 1, keepdims=True)
+        stddevs = tf.math.reduce_std(log_mel_spec, 1, keepdims=True)
+        log_mel_spec = (log_mel_spec - means) / (stddevs + 1e-10)
 
     features = log_mel_spec
 

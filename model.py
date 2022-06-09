@@ -1,8 +1,8 @@
-from numpy import concatenate
+from numpy import concatenate, std
 from operator import not_
 import tensorflow as tf
 import tensorflow.keras as keras
-from keras import layers, models, activations, initializers, regularizers
+from keras import layers, models, activations, regularizers
 import tensorflow.keras.backend as K
 
 from data.voxceleb import *
@@ -12,7 +12,7 @@ from utils.model_utils import *
 
 def get_model(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
     # CHOOSE MODEL -----------------------------------------------
-    model = speaker_rec_model_att_like(hparams, num_classes, stateful, dtype, inference)
+    model = speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful, dtype, inference)
     # ------------------------------------------------------------
 
     model.summary()
@@ -187,21 +187,31 @@ def speaker_rec_model_att_like(hparams, num_classes, stateful=False, dtype=tf.fl
 
     encode = layers.LSTM(
         num_lstm_units, 
+        # activation="relu",
+        # recurrent_activation="relu",
         return_sequences=True, 
         stateful=stateful,
         kernel_regularizer=regularizers.L2(l2=0.0001),
         recurrent_regularizer=regularizers.L2(l2=0.0001),
+        # recurrent_initializer=keras.initializers.Identity(),
+        # kernel_initializer=keras.initializers.RandomNormal(mean=0, stddev=0.001, seed=1997),
         name="LSTM_0")(encode_in)
     # encode_in = layers.Dense(num_lstm_units, activation="tanh", kernel_regularizer=regularizers.L2(l2=0.0001))(encode_in)
     # encode = layers.Add()([encode, encode_in])
     encode = TimeReduction(reduction_factor=2, batch_size=batch_size, name="TIME_REDUCTION_E")(encode)
     encode = layers.LSTM(
         num_lstm_units, 
+        # activation="relu",
+        # recurrent_activation="relu",
         return_sequences=True, 
         stateful=stateful, 
         kernel_regularizer=regularizers.L2(l2=0.0001),
         recurrent_regularizer=regularizers.L2(l2=0.0001),
+        # recurrent_initializer=keras.initializers.Identity(),
+        # kernel_initializer=keras.initializers.RandomNormal(mean=0, stddev=0.001, seed=1997),
         name="LSTM_1")(encode)
+
+    encode = BreakpointLayerForDebug()(encode)
 
     # SA Layer
     sa_output = SelfAttentionMechanismFn(
@@ -210,7 +220,113 @@ def speaker_rec_model_att_like(hparams, num_classes, stateful=False, dtype=tf.fl
         encode, 
         name="SA_0")
 
-    output_proj = layers.Dense(num_dense_units, kernel_regularizer=regularizers.L2(l2=0.0001), activation="sigmoid", name="DENSE_0")(sa_output)
+    # sa_stacked_out = layers.Reshape([num_self_att_hops, num_lstm_units], name="SA_1_INPUT")(sa_output)
+
+    # sa_output = SelfAttentionMechanismFn(
+    #     1, 
+    #     num_self_att_units, 
+    #     sa_stacked_out, 
+    #     name="SA_1")
+
+    output_proj = layers.Dense(num_dense_units, kernel_regularizer=regularizers.L2(l2=0.0001), activation="relu", name="DENSE_0")(sa_output)
+
+    # TEST LAYER FOR LINEAR SEPARABILITY
+    # output_proj = layers.Dense(2, activation="relu", name="TEST_PROJECTION")(output_proj)
+
+    # Output logits layers
+    output = layers.Dense(num_classes, activation=None, kernel_regularizer=regularizers.L2(l2=0.0001), name="DENSE_OUT")(output_proj)
+    
+    # Output activation layer
+    # output = layers.Activation(activation="sigmoid", name="SIGMOID_OUT")(output)
+    # output = layers.Softmax(name="SOFTMAX_OUT", dtype=dtype)(output)
+    # ---------------------------------------------------------------------------------------
+
+    # Put model together
+    model = keras.Model(inputs=[input],
+                        outputs=[output, output_proj], name="speaker_rec_model_att_like")
+
+    
+    return model
+
+
+def speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
+    # Preprocessing parameters
+    SAMPLE_RATE = hparams[HP_SAMPLE_RATE.name]
+    FRAME_LENGTH = int(hparams[HP_FRAME_LENGTH.name] * SAMPLE_RATE)
+    FRAME_STEP = int(hparams[HP_FRAME_STEP.name] * SAMPLE_RATE)
+    MAX_AUDIO_LENGTH = hparams[HP_MAX_NUM_FRAMES.name] * FRAME_STEP + FRAME_LENGTH - FRAME_STEP
+    # NUM_MEL_BINS = hparams[HP_NUM_MEL_BINS.name]
+
+    # Model parameters
+    num_lstm_units = hparams[HP_NUM_LSTM_UNITS.name]
+    num_self_att_units = hparams[HP_NUM_SELF_ATT_UNITS.name]
+    num_self_att_hops = hparams[HP_NUM_SELF_ATT_HOPS.name]
+    num_dense_units = hparams[HP_NUM_DENSE_UNITS.name]
+
+    batch_size = None
+    if stateful:
+        batch_size = 1
+
+    input_shape = [None] # if inference else [MAX_AUDIO_LENGTH]
+
+    # Define model
+    # Preprocessing layers (for on device) -------------------------------------------------
+    input = keras.Input(
+        shape=input_shape, 
+        batch_size=batch_size, 
+        dtype=dtype, 
+        name='PREPROCESS_INPUT')
+    encode_in = layers.Lambda(
+        lambda x: convert_to_log_mel_spec_layer(x, hparams=hparams, normalize=True), 
+        trainable=False, 
+        dtype=dtype, 
+        name="LOG_MEL_SPEC")(input)
+    encode_in = layers.Lambda(
+        lambda x: group_and_downsample_spec_v2_layer(x, hparams=hparams), 
+        trainable=False, 
+        dtype=dtype, 
+        name="DOWNSAMPLE")(encode_in)
+    # ---------------------------------------------------------------------------------------
+
+    # Trainable layers ----------------------------------------------------------------------
+    # Note: the inference flag is in the NORMALIZE layer if Layer Normalization used in training since it attaches parameters to fixed time length
+    # and in inference, we want variable time
+    # encode_in = layers.LayerNormalization(axis=-2, name="NORMALIZE", trainable=False, center=not_(inference), scale=not_(inference))(encode_in)
+
+    encode = IRNN(
+        num_lstm_units*2, 
+        identity_scale=0.1,
+        stacking_number=1,
+        stateful=stateful,
+        name="IRNN_0")(encode_in)
+    # encode_in = layers.Dense(num_lstm_units, activation="tanh", kernel_regularizer=regularizers.L2(l2=0.0001))(encode_in)
+    # encode = layers.Add()([encode, encode_in])
+    encode = TimeReduction(reduction_factor=2, batch_size=batch_size, name="TIME_REDUCTION_E")(encode)
+    encode = IRNN(
+        num_lstm_units, 
+        identity_scale=0.1,
+        stacking_number=1,
+        stateful=stateful,
+        name="IRNN_1")(encode)
+
+    encode = BreakpointLayerForDebug()(encode)
+
+    # SA Layer
+    sa_output = SelfAttentionMechanismFn(
+        num_self_att_hops, 
+        num_self_att_units, 
+        encode, 
+        name="SA_0")
+
+    # sa_stacked_out = layers.Reshape([num_self_att_hops, num_lstm_units], name="SA_1_INPUT")(sa_output)
+
+    # sa_output = SelfAttentionMechanismFn(
+    #     1, 
+    #     num_self_att_units, 
+    #     sa_stacked_out, 
+    #     name="SA_1")
+
+    output_proj = layers.Dense(num_dense_units, kernel_regularizer=regularizers.L2(l2=0.0001), activation="relu", name="DENSE_0")(sa_output)
 
     # TEST LAYER FOR LINEAR SEPARABILITY
     # output_proj = layers.Dense(2, activation="relu", name="TEST_PROJECTION")(output_proj)

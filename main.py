@@ -190,6 +190,7 @@ def main(_):
         run_dir = checkpoint_dir[0:-12]
 
     # Initalize weights to a run for multi step training
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20220503-142802/checkpoints/"
     pretrained_weights = None
 
     # Init the environment
@@ -233,6 +234,7 @@ def main(_):
 
         model.compile(
             optimizer=optimizers.Adam(learning_rate=AttentionLRScheduler(2000, hparams[HP_NUM_LSTM_UNITS.name])),
+            # optimizer=optimizers.Adam(learning_rate=0.001),
             # loss=tfa.losses.SigmoidFocalCrossEntropy(from_logits=True, reduction=losses.Reduction.SUM_OVER_BATCH_SIZE),
             # loss=losses.CategoricalCrossentropy(from_logits=True, reduction=losses.Reduction.SUM_OVER_BATCH_SIZE),
             # loss=JointSoftmaxCenterLoss(from_logits=True, reduction=losses.Reduction.SUM_OVER_BATCH_SIZE),
@@ -244,6 +246,8 @@ def main(_):
             loss_weights={"DENSE_OUT": 1, "DENSE_0": 0.0001},
             metrics={"DENSE_OUT": [metrics.CategoricalAccuracy(), metrics.TopKCategoricalAccuracy(k=5)]},
         )
+
+        model.run_eagerly = True
 
     # Define callbacks
     tb_callback = callbacks.TensorBoard(
@@ -277,7 +281,7 @@ def main(_):
             ds_train,
             epochs=num_epochs,
             validation_data=ds_val,
-            callbacks=[tb_callback, ckpt_callback, early_stop_callback],
+            callbacks=[tb_callback, ckpt_callback],
             verbose=1,
             # initial_epoch=12 # change for checkpoint !!!!
             # steps_per_epoch=20 # FOR TESTING TO MAKE EPOCH SHORTER
@@ -440,25 +444,27 @@ def run_evaluate(model,
         def step_fn(inputs):
             x, y_true = inputs
 
+            '''
             # For each segment, run prediction
-            # y_preds = None
-            # for i in range(tf.shape(x)[0]):
-            #     y_pred = model(tf.reshape(x[i], [1, tf.shape(x[i])[0]]), training=False)
-            #     # y_pred /= tf.reduce_max(y_pred)
-            #     # y_pred_type = y_pred.dtype
-            #     # y_pred = tf.where(
-            #     #     # tf.equal(tf.reduce_max(y_pred, axis=1, keepdims=True), y_pred), 
-            #     #     tf.greater_equal(y_pred, 0.9),
-            #     #     tf.constant(1, shape=y_pred.shape), 
-            #     #     tf.constant(0, shape=y_pred.shape)
-            #     # )
-            #     # y_pred = tf.cast(y_pred, dtype=y_pred_type)
-            #     if y_preds == None:
-            #         y_preds = y_pred
-            #     else:
-            #         y_preds = tf.concat([y_preds, y_pred], axis=0)
+            y_preds = None
+            for i in range(tf.shape(x)[0]):
+                y_pred = model(tf.reshape(x[i], [1, tf.shape(x[i])[0]]), training=False)
+                # y_pred /= tf.reduce_max(y_pred)
+                # y_pred_type = y_pred.dtype
+                # y_pred = tf.where(
+                #     # tf.equal(tf.reduce_max(y_pred, axis=1, keepdims=True), y_pred), 
+                #     tf.greater_equal(y_pred, 0.9),
+                #     tf.constant(1, shape=y_pred.shape), 
+                #     tf.constant(0, shape=y_pred.shape)
+                # )
+                # y_pred = tf.cast(y_pred, dtype=y_pred_type)
+                if y_preds == None:
+                    y_preds = y_pred
+                else:
+                    y_preds = tf.concat([y_preds, y_pred], axis=0)
             
-            # y_pred_comb = tf.reduce_mean(y_preds, axis=0, keepdims=True)
+            y_pred_comb = tf.reduce_mean(y_preds, axis=0, keepdims=True)
+            '''
 
             y_pred_comb, _ = model(x, training=False)
 
@@ -518,7 +524,7 @@ def run_evaluate(model,
 
 def test_model(_):
     # Add checkpoint folder
-    checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20220502-120246/checkpoints/"
+    checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20220503-142802/checkpoints/"
 
     # Do we run eagerly for debugging? By default, we don't. Set "True" for here on.
     # tf.config.run_functions_eagerly(True)
@@ -568,9 +574,17 @@ def test_model(_):
         logging.info('Restored weights from {}.'.format(checkpoint_dir))
 
     model.compile(
-        optimizer=optimizers.Adam(learning_rate=lr),
-        loss=tfa.losses.SigmoidFocalCrossEntropy(from_logits=False, reduction=losses.Reduction.SUM_OVER_BATCH_SIZE),  # True if last layer is not softmax
-        metrics=[metrics.CategoricalAccuracy(), metrics.TopKCategoricalAccuracy(k=5)],
+        optimizer=optimizers.Adam(learning_rate=AttentionLRScheduler(2000, hparams[HP_NUM_LSTM_UNITS.name])),
+        # loss=tfa.losses.SigmoidFocalCrossEntropy(from_logits=True, reduction=losses.Reduction.SUM_OVER_BATCH_SIZE),
+        # loss=losses.CategoricalCrossentropy(from_logits=True, reduction=losses.Reduction.SUM_OVER_BATCH_SIZE),
+        # loss=JointSoftmaxCenterLoss(from_logits=True, reduction=losses.Reduction.SUM_OVER_BATCH_SIZE),
+        loss={
+            "DENSE_OUT": losses.CategoricalCrossentropy(from_logits=True, reduction=losses.Reduction.SUM_OVER_BATCH_SIZE),
+            # "DENSE_OUT": tfa.losses.SigmoidFocalCrossEntropy(from_logits=True, reduction=losses.Reduction.SUM_OVER_BATCH_SIZE),
+            "DENSE_0": CenterLoss(ratio=1, from_logits=True, reduction=losses.Reduction.SUM_OVER_BATCH_SIZE)
+        },
+        loss_weights={"DENSE_OUT": 1, "DENSE_0": 0.0001},
+        metrics={"DENSE_OUT": [metrics.CategoricalAccuracy(), metrics.TopKCategoricalAccuracy(k=5)]},
         # run_eagerly=True
     )
     # model.run_eagerly = True
@@ -583,7 +597,7 @@ def test_model(_):
     eval_res = run_evaluate(
         model, 
         optimizer=optimizers.Adam(learning_rate=lr), 
-        loss_fn=tfa.losses.sigmoid_focal_crossentropy, 
+        loss_fn=losses.categorical_crossentropy, 
         eval_dataset=eval_dataset, 
         batch_size=batch_size, 
         strategy=strategy,
@@ -616,9 +630,9 @@ def test_model(_):
 
 if __name__ == '__main__':
     # tf.config.run_functions_eagerly(False)
-    # app.run(main)
+    app.run(main)
     # app.run(hparam_search)
-    app.run(test_model)
+    # app.run(test_model)
     print("End")
 
 # CUSTOM TRAINING LOOP
@@ -639,4 +653,55 @@ if __name__ == '__main__':
 #     # Training step
 #     for batch_idx, (x, y) in enumerate(ds_train):
 #         with tf.GradientTape() as tape:
-#             y_pred = model(x, training=True
+#             y_pred = model(x, training=True)
+#             loss = loss_fn(y, y_pred)
+#
+#         gradients = tape.gradient(loss, model.trainable_weights)
+#         optimizer.apply_gradients(zip(gradients, model.trainable_weights))
+#         acc_metric.update_state(y, y_pred)
+#
+#         # Update progress bar (per batch)
+#         values = [('train_loss', loss.numpy()), ('train_acc', acc_metric.result())]
+#         prog_bar.update(batch_idx * batch_size, values=values)
+#
+#     # Freeze metrics
+#     train_loss = loss.numpy()
+#     train_acc = acc_metric.result().numpy()
+#
+#     # Tensorboard logging (per epoch)
+#     with train_writer.as_default():
+#         tf.summary.scalar("Loss", train_loss, step=epoch+1)
+#         tf.summary.scalar(
+#             "Accuracy", train_acc, step=epoch+1,
+#         )
+#         train_step += 1
+#
+#     # Reset accuracy in between epochs
+#     acc_metric.reset_states()
+#
+#     # VALIDATION ------------------------------------------------------------
+#
+#     # Iterate through validation set
+#     for batch_idx, (x, y) in enumerate(ds_val):
+#         y_pred = model(x, training=False)
+#         loss = loss_fn(y, y_pred)
+#         acc_metric.update_state(y, y_pred)
+#
+#     # Freeze metrics
+#     val_loss = loss.numpy()
+#     val_acc = acc_metric.result().numpy()
+#
+#     # Tensorboard logging (per epoch)
+#     with val_writer.as_default():
+#         tf.summary.scalar("Loss", val_loss, step=epoch+1)
+#         tf.summary.scalar(
+#             "Accuracy", val_acc, step=epoch+1,
+#         )
+#         val_step += 1
+#
+#     # Update progress bar (per epoch)
+#     values = [('train_loss', train_loss), ('train_acc', train_acc), ('val_loss', val_loss), ('val_acc', val_acc)]
+#     prog_bar.update(ds_info.splits['train'].num_examples, values=values, finalize=True)
+#
+#     # Reset accuracy final
+#     acc_metric.reset_states()

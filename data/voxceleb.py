@@ -56,6 +56,7 @@ def preprocess(data, label, max_audio_length, dtype):
     # processed = convert_to_float32(data)
     processed = pad_audio(data, max_audio_length)
     processed = take_random_segment(processed, max_audio_length)
+    # processed = quantize(processed, 8)
     # processed = convert_to_log_mel_spec(
     #     processed,
     #     sr=SAMPLE_RATE,
@@ -71,6 +72,11 @@ def preprocess(data, label, max_audio_length, dtype):
     #     stack_size=STACK_SIZE)
 
     return processed, label
+
+def quantize(data, bits):
+    scale = 2**bits - 1
+    processed = data / tf.reduce_max(tf.abs(data)) * scale + scale
+    return processed
 
 
 def preprocess_cast(data, label, max_audio_length, dtype):

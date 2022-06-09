@@ -1,7 +1,48 @@
 import tensorflow as tf
+import tensorflow.keras as keras
 from tensorflow.keras import layers, optimizers, regularizers, losses
 import tensorflow.keras.backend as K
 import math
+
+
+class IRNN(layers.Layer):
+    '''
+    Model from arXiv:1504.00941v2
+    A Simple Way to Initialize Recurrent Networks of
+    Rectified Linear Units
+    '''
+    def __init__(self, hidden_size, identity_scale, stacking_number=1, stateful=False, name=""):
+        super(IRNN, self).__init__(name=name)
+        self.hidden_size = hidden_size
+        self.stateful = stateful
+        self.identity_scale = identity_scale
+        self.irnn = layers.RNN(
+            layers.StackedRNNCells(
+                [layers.SimpleRNNCell(
+                    hidden_size,
+                    activation="relu",
+                    kernel_initializer=keras.initializers.RandomNormal(mean=0, stddev=0.001),
+                    recurrent_initializer=keras.initializers.Identity(gain=identity_scale),
+                ) for _ in range(stacking_number)]
+            ),
+            return_sequences=True,
+            stateful=stateful
+        )
+
+    def call(self, inputs):
+        out = self.irnn(inputs)
+        return out
+
+
+class BreakpointLayerForDebug(layers.Layer):
+
+    def __init__(self):
+        super().__init__()
+
+    def call(self, inputs):
+        vele = "ferus" # place breakpoint here
+        # inputs = tf.where(tf.math.is_nan(inputs), tf.zeros_like(inputs), inputs)
+        return inputs
 
 
 class CenterLoss(losses.Loss):
@@ -53,6 +94,9 @@ class CenterLoss(losses.Loss):
         
         # Get center vectors based on current label (indicies given by sparse labels)
         centers_batch = tf.gather(self.centers, sparse_labels)
+
+        # Check for and convert NaNs to zeros
+        features = tf.where(tf.math.is_nan(features), tf.zeros_like(features), features)
 
         # Calculate loss based on current centers (note division by two included)
         loss_diff = features - centers_batch
@@ -261,14 +305,14 @@ def SelfAttentionMechanismFn(num_hops, hidden_size, inputs, name):
 
     #matmul1
     sa_matmul1 = layers.Dense(
-        n_c, activation="tanh", use_bias=False, 
+        n_c, activation="relu", use_bias=False, 
         kernel_regularizer=regularizers.L2(l2=0.0001),
         name=name+"_DENSE_0"
         )(inputs)
     
     # matmul2
     sa_matmul2 = layers.Dense(
-        n_k, activation="sigmoid", use_bias=False, 
+        n_k, activation="relu", use_bias=False, 
         kernel_regularizer=regularizers.L2(l2=0.0001),
         name=name+"_DENSE_1"
         )(sa_matmul1)
@@ -282,7 +326,10 @@ def SelfAttentionMechanismFn(num_hops, hidden_size, inputs, name):
     # matmul3
     sa_matmul3 = layers.Dot(axes=[2,1], name=name+"_DOT")([sa_trans, inputs])
 
+    # sa_avg = layers.GlobalAveragePooling1D(name=name+"_TAP")(sa_matmul3)
+
     sa_output = layers.Reshape([n_h*n_k], name=name+"_OUTPUT")(sa_matmul3)
+    # sa_output = layers.Reshape([n_h], name=name+"_OUTPUT")(sa_avg)
 
     return sa_output
 
@@ -344,4 +391,119 @@ def SelfAttentionMechanismFn(num_hops, hidden_size, inputs, name):
 #                                       shape=(input_shape[1], 1),
 #                                       initializer='ones',
 #                                       trainable=True)
-#         layers.Layer.build
+#         layers.Layer.build(self, input_shape)
+
+#     def compute_output_shape(self, input_shape):
+#         return input_shape[0], input_shape[2],
+
+#     def call(self, x):
+
+#         x = x*self.kernel
+#         x = K.mean(x, axis=1)
+
+#         return x
+
+
+# # https://github.com/csvance/keras-global-weighted-pooling/blob/master/gwp.py
+# class GlobalWeightedMaxPooling1D(layers.Layer):
+#     def __init__(self, **kwargs):
+#         layers.Layer.__init__(self, **kwargs)
+
+#     def build(self, input_shape):
+#         self.kernel = self.add_weight(name='kernel',
+#                                       shape=(input_shape[1], 1),
+#                                       initializer='ones',
+#                                       trainable=True)
+#         layers.Layer.build(self, input_shape)
+
+#     def compute_output_shape(self, input_shape):
+#         return input_shape[0], input_shape[2],
+
+#     def call(self, x):
+
+#         x = x*self.kernel
+#         x = K.max(x, axis=1)
+
+#         return x
+
+
+# # https://github.com/csvance/keras-global-weighted-pooling/blob/master/gwp.py
+# class GlobalWeightedAveragePooling2D(layers.Layer):
+#     def __init__(self, **kwargs):
+#         layers.Layer.__init__(self, **kwargs)
+
+#     def build(self, input_shape):
+#         self.kernel = self.add_weight(name='kernel',
+#                                       shape=(input_shape[1], input_shape[2], 1),
+#                                       initializer='ones',
+#                                       trainable=True)
+#         layers.Layer.build(self, input_shape)
+
+#     def compute_output_shape(self, input_shape):
+#         return input_shape[0], input_shape[3],
+
+#     def call(self, x):
+        
+#         x = x*self.kernel
+#         x = K.mean(x, axis=(1, 2))
+
+#         return x
+
+
+# # https://github.com/csvance/keras-global-weighted-pooling/blob/master/gwp.py
+# class GlobalWeightedMaxPooling2D(layers.Layer):
+#     def __init__(self, **kwargs):
+#         layers.Layer.__init__(self, **kwargs)
+
+#     def build(self, input_shape):
+#         self.kernel = self.add_weight(name='kernel',
+#                                       shape=(input_shape[1], input_shape[2], 1),
+#                                       initializer='ones',
+#                                       trainable=True)
+#         layers.Layer.build(self, input_shape)
+
+#     def compute_output_shape(self, input_shape):
+#         return input_shape[0], input_shape[3],
+
+#     def call(self, x):
+
+#         x = x*self.kernel
+#         x = K.max(x, axis=(1, 2))
+
+#         return x
+
+# # https://github.com/linhdvu14/vggvox-speaker-identification/blob/master/model.py
+# # Block of layers: Conv --> BatchNorm --> ReLU --> Pool
+# def conv_bn_pool(inp_tensor,layer_idx,conv_filters,conv_kernel_size,conv_strides,conv_pad,pool='',pool_size=(2, 2),pool_strides=None,
+#     conv_layer_prefix='conv'):
+# 	x = layers.ZeroPadding2D(padding=conv_pad,name='pad{}'.format(layer_idx))(inp_tensor)
+# 	x = layers.Conv2D(
+#         filters=conv_filters,
+#         kernel_size=conv_kernel_size, 
+#         strides=conv_strides, 
+#         padding='valid', 
+#         name='{}{}'.format(conv_layer_prefix,layer_idx))(x)
+# 	x = layers.BatchNormalization(epsilon=1e-5,momentum=1,name='bn{}'.format(layer_idx))(x)
+# 	x = layers.Activation('relu', name='relu{}'.format(layer_idx))(x)
+# 	if pool == 'max':
+# 		x = layers.MaxPooling2D(pool_size=pool_size,strides=pool_strides,name='mpool{}'.format(layer_idx))(x)
+# 	elif pool == 'avg':
+# 		x = layers.AveragePooling2D(pool_size=pool_size,strides=pool_strides,name='apool{}'.format(layer_idx))(x)
+# 	return x
+
+
+# # https://github.com/linhdvu14/vggvox-speaker-identification/blob/master/model.py
+# # Block of layers: Conv --> BatchNorm --> ReLU --> Dynamic average pool (fc6 -> apool6 only)
+# def conv_bn_dynamic_apool(inp_tensor,layer_idx,conv_filters,conv_kernel_size,conv_strides,conv_pad,conv_layer_prefix='conv'):
+# 	x = layers.ZeroPadding2D(padding=conv_pad,name='pad{}'.format(layer_idx))(inp_tensor)
+# 	x = layers.Conv2D(
+#         filters=conv_filters,
+#         kernel_size=conv_kernel_size, 
+#         strides=conv_strides, 
+#         padding='valid', 
+#         name='{}{}'.format(conv_layer_prefix,layer_idx))(x)
+# 	x = layers.BatchNormalization(epsilon=1e-5,momentum=1,name='bn{}'.format(layer_idx))(x)
+# 	x = layers.Activation('relu', name='relu{}'.format(layer_idx))(x)
+# 	x = layers.GlobalAveragePooling2D(name='gapool{}'.format(layer_idx))(x)
+# 	x = layers.Reshape((1,1,conv_filters),name='reshape{}'.format(layer_idx))(x)
+# 	return x

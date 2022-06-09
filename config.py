@@ -43,7 +43,7 @@ HP_NUM_LSTM_UNITS = hp.HParam('num_lstm_units', hp.Discrete([256]))
 
 # Attention aggregation layer
 HP_NUM_SELF_ATT_UNITS = hp.HParam('num_self_att_units', hp.Discrete([512]))
-HP_NUM_SELF_ATT_HOPS = hp.HParam('num_self_att_hops', hp.Discrete([1]))
+HP_NUM_SELF_ATT_HOPS = hp.HParam('num_self_att_hops', hp.Discrete([4]))
 
 # Penultimate classification dense layers
 HP_NUM_DENSE_UNITS = hp.HParam('num_dense_units', hp.Discrete([2048]))

@@ -1,6 +1,6 @@
 import numpy as np
 import tensorflow as tf
-import tensorflow.keras.backend as K
+import keras.backend as K
 
 # Import datasets
 import tensorflow_datasets as tfds
@@ -24,7 +24,6 @@ STACK_SIZE = HP_STACK_SIZE.domain.values[0]
 
 def cast(data, dtype):
     return tf.cast(data, dtype=dtype)
-
 
 def take_random_segment(data, max_audio_length):
     # Take random segment of audio
@@ -51,7 +50,6 @@ def split_into_segments(data, max_audio_length):
 
     return reshaped
 
-
 def preprocess(data, label, max_audio_length, dtype):
     # processed = convert_to_float32(data)
     processed = pad_audio(data, max_audio_length)
@@ -74,8 +72,9 @@ def preprocess(data, label, max_audio_length, dtype):
     return processed, label
 
 def quantize(data, bits):
-    scale = 2**bits - 1
-    processed = data / tf.reduce_max(tf.abs(data)) * scale + scale
+    # scale = 2**bits - 1
+    # processed = data / tf.reduce_max(tf.abs(data)) * scale + scale
+    processed = tf.sign(data)
     return processed
 
 

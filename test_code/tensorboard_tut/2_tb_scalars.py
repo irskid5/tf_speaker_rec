@@ -8,10 +8,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow_datasets as tfds
 
-
-from tensorflow import keras
-from tensorflow.keras import layers
-
 # Make sure we don't get any GPU errors
 physical_devices = tf.config.list_physical_devices("GPU")
 tf.config.experimental.set_memory_growth(physical_devices[0], True)
@@ -72,16 +68,16 @@ class_names = [
 
 
 def get_model():
-    model = keras.Sequential(
+    model = tf.keras.Sequential(
         [
-            layers.Input((32, 32, 3)),
-            layers.Conv2D(8, 3, padding="same", activation="relu"),
-            layers.Conv2D(16, 3, padding="same", activation="relu"),
-            layers.MaxPooling2D((2, 2)),
-            layers.Flatten(),
-            layers.Dense(64, activation="relu"),
-            layers.Dropout(0.1),
-            layers.Dense(10),
+            tf.keras.layers.Input((32, 32, 3)),
+            tf.keras.layers.Conv2D(8, 3, padding="same", activation="relu"),
+            tf.keras.layers.Conv2D(16, 3, padding="same", activation="relu"),
+            tf.keras.layers.MaxPooling2D((2, 2)),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(64, activation="relu"),
+            tf.keras.layers.Dropout(0.1),
+            tf.keras.layers.Dense(10),
         ]
     )
 
@@ -90,9 +86,9 @@ def get_model():
 
 model = get_model()
 num_epochs = 10
-loss_fn = keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-optimizer = keras.optimizers.Adam(learning_rate=0.001)
-acc_metric = keras.metrics.SparseCategoricalAccuracy()
+loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+acc_metric = tf.keras.metrics.SparseCategoricalAccuracy()
 train_writer = tf.summary.create_file_writer("logs/train/")
 test_writer = tf.summary.create_file_writer("logs/test/")
 train_step = test_step = 0
@@ -103,7 +99,7 @@ for lr in [1e-1, 1e-2, 1e-3, 1e-4, 1e-5]:
     train_writer = tf.summary.create_file_writer("logs/train/" + str(lr))
     test_writer = tf.summary.create_file_writer("logs/test/" + str(lr))
     model = get_model()
-    optimizer = keras.optimizers.Adam(learning_rate=lr)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
 
     for epoch in range(num_epochs):
         # Iterate through training set

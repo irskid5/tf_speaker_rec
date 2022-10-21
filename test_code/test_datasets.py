@@ -1,8 +1,6 @@
 from scipy.io.wavfile import write
 import numpy as np
 import tensorflow as tf
-import tensorflow.keras as keras
-from keras import layers
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -170,7 +168,7 @@ max_audio = MAX_NUM_FRAMES * STEP_SIZE + WINDOW_SIZE - STEP_SIZE
 AUTOTUNE = tf.data.experimental.AUTOTUNE
 
 # Cast audio to float32
-sample = convert_to_float32(sample)
+sample = tf.cast(sample, tf.float32)
 
 # Pad the audio if smaller than desired length
 sample = pad_audio(sample, max_audio)

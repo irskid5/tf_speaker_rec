@@ -78,3 +78,45 @@ def confusion_matrix(y_true, y_pred, num_classes, one_hot=True):
     fig = plot_confusion_matrix(cm, class_str_labels)
     save_confusion_matrix(fig)
     return None
+
+def plot_histogram_discrete(x, filename):
+    """
+    Plot histogram for wx+b
+    """
+    import matplotlib.pyplot as plt
+    x_int = tf.reshape(tf.cast(x, tf.int32), [-1]).numpy()
+    # max = np.max(x_int)
+    # min = np.min(x_int)
+    # diff = max - min
+    d = np.diff(np.unique(x_int)).min()
+    left_of_first_bin = x_int.min() - float(d)/2
+    right_of_last_bin = x_int.max() + float(d)/2
+    plt.hist(tf.reshape(x, [-1]).numpy(), np.arange(left_of_first_bin, right_of_last_bin + d, d))
+    plt.xlabel('Wx+b')
+    plt.ylabel('Count')
+    plt.title('Where does Wx+b land?')
+    plt.xlim(left_of_first_bin - float(d)/2, right_of_last_bin + float(d)/2)
+    # plt.ylim(0, 80)
+    plt.grid(True)
+    # plt.show()
+    # plt.hist()
+    # plt.hist(x_int, bins = diff+10)
+    plt.savefig(filename)
+    plt.clf()
+
+def plot_histogram_continous(x, filename):
+    """
+    Plot histogram for wx+b
+    """
+    import matplotlib.pyplot as plt
+    plt.hist(tf.reshape(x, [-1]).numpy(), bins=100)
+    plt.xlabel('Bin')
+    plt.ylabel('Count')
+    plt.title('Distribution')
+    # plt.ylim(0, 80)
+    plt.grid(True)
+    # plt.show()
+    # plt.hist()
+    # plt.hist(x_int, bins = diff+10)
+    plt.savefig(filename)
+    plt.clf()

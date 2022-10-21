@@ -8,10 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow_datasets as tfds
 
-from tensorflow import keras
-from tensorflow.keras import layers
-
-from utils import plot_to_image, image_grid
+from test_code.tensorboard_tut.utils import plot_to_image, image_grid
 
 # Make sure we don't get any GPU errors
 physical_devices = tf.config.list_physical_devices("GPU")
@@ -76,16 +73,16 @@ class_names = [
 
 
 def get_model():
-    model = keras.Sequential(
+    model = tf.keras.Sequential(
         [
-            layers.Input((32, 32, 3)),
-            layers.Conv2D(8, 3, padding="same", activation="relu"),
-            layers.Conv2D(16, 3, padding="same", activation="relu"),
-            layers.MaxPooling2D((2, 2)),
-            layers.Flatten(),
-            layers.Dense(64, activation="relu"),
-            layers.Dropout(0.1),
-            layers.Dense(10),
+            tf.keras.layers.Input((32, 32, 3)),
+            tf.keras.layers.Conv2D(8, 3, padding="same", activation="relu"),
+            tf.keras.layers.Conv2D(16, 3, padding="same", activation="relu"),
+            tf.keras.layers.MaxPooling2D((2, 2)),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(64, activation="relu"),
+            tf.keras.layers.Dropout(0.1),
+            tf.keras.layers.Dense(10),
         ]
     )
 
@@ -94,9 +91,9 @@ def get_model():
 
 model = get_model()
 num_epochs = 1
-loss_fn = keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-optimizer = keras.optimizers.Adam(learning_rate=0.001)
-acc_metric = keras.metrics.SparseCategoricalAccuracy()
+loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+acc_metric = tf.keras.metrics.SparseCategoricalAccuracy()
 writer = tf.summary.create_file_writer("logs/train/")
 step = 0
 

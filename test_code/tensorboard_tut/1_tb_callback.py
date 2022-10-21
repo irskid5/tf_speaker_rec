@@ -8,9 +8,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow_datasets as tfds
 
-import tensorflow.keras as keras
-from tensorflow.keras import layers
-
 # Make sure we don't get any GPU errors
 physical_devices = tf.config.list_physical_devices("GPU")
 tf.config.experimental.set_memory_growth(physical_devices[0], True)
@@ -68,18 +65,17 @@ class_names = [
     "Truck",
 ]
 
-
 def get_model():
-    model = keras.Sequential(
+    model = tf.keras.Sequential(
         [
-            layers.Input((32, 32, 3)),
-            layers.Conv2D(8, 3, padding="same", activation="relu"),
-            layers.Conv2D(16, 3, padding="same", activation="relu"),
-            layers.MaxPooling2D((2, 2)),
-            layers.Flatten(),
-            layers.Dense(64, activation="relu"),
-            layers.Dropout(0.1),
-            layers.Dense(10),
+            tf.keras.layers.Input((32, 32, 3)),
+            tf.keras.layers.Conv2D(8, 3, padding="same", activation="relu"),
+            tf.keras.layers.Conv2D(16, 3, padding="same", activation="relu"),
+            tf.keras.layers.MaxPooling2D((2, 2)),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(64, activation="relu"),
+            tf.keras.layers.Dropout(0.1),
+            tf.keras.layers.Dense(10),
         ]
     )
 
@@ -90,9 +86,9 @@ model = get_model()
 # CUSTOM TRAINING LOOP
 
 # num_epochs = 1
-# loss_fn = keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-# optimizer = keras.optimizers.Adam(lr=0.001)
-# acc_metric = keras.metrics.SparseCategoricalAccuracy()
+# loss_fn = losses.SparseCategoricalCrossentropy(from_logits=True)
+# optimizer = tf.keras.optimizers.Adam(lr=0.001)
+# acc_metric = tf.keras.metrics.SparseCategoricalAccuracy()
 # train_writer = tf.summary.create_file_writer("logs/train/")
 # test_writer = tf.summary.create_file_writer("logs/test/")
 # train_step = test_step = 0
@@ -116,12 +112,12 @@ model = get_model()
 #     acc_metric.reset_states()
 
 model.compile(
-    optimizer=keras.optimizers.Adam(lr=0.001),
-    loss=keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+    optimizer=tf.keras.optimizers.Adam(lr=0.001),
+    loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
     metrics=["accuracy"],
 )
 
-tensorboard_callback = keras.callbacks.TensorBoard(
+tensorboard_callback = tf.keras.callbacks.TensorBoard(
     log_dir="tb_callback_dir", histogram_freq=1,
 )
 

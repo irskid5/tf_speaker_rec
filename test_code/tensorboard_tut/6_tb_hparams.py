@@ -9,8 +9,6 @@ import numpy as np
 import tensorflow_datasets as tfds
 
 from tensorboard.plugins.hparams import api as hp
-from tensorflow import keras
-from tensorflow.keras import layers
 
 # Make sure we don't get any GPU errors
 physical_devices = tf.config.list_physical_devices("GPU")
@@ -76,17 +74,17 @@ def train_model_one_epoch(hparams):
     drop_rate = hparams[HP_DROPOUT]
     learning_rate = hparams[HP_LR]
 
-    optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
-    model = keras.Sequential(
+    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+    model = tf.keras.Sequential(
         [
-            layers.Input((32, 32, 3)),
-            layers.Conv2D(8, 3, padding="same", activation="relu"),
-            layers.Conv2D(16, 3, padding="same", activation="relu"),
-            layers.MaxPooling2D((2, 2)),
-            layers.Flatten(),
-            layers.Dense(units, activation="relu"),
-            layers.Dropout(drop_rate),
-            layers.Dense(10),
+            tf.keras.layers.Input((32, 32, 3)),
+            tf.keras.layers.Conv2D(8, 3, padding="same", activation="relu"),
+            tf.keras.layers.Conv2D(16, 3, padding="same", activation="relu"),
+            tf.keras.layers.MaxPooling2D((2, 2)),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(units, activation="relu"),
+            tf.keras.layers.Dropout(drop_rate),
+            tf.keras.layers.Dense(10),
         ]
     )
 
@@ -118,9 +116,9 @@ def train_model_one_epoch(hparams):
     acc_metric.reset_states()
 
 
-loss_fn = keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-optimizer = keras.optimizers.Adam(learning_rate=0.001)
-acc_metric = keras.metrics.SparseCategoricalAccuracy()
+loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+acc_metric = tf.keras.metrics.SparseCategoricalAccuracy()
 
 # CREATE HPARAMS
 HP_NUM_UNITS = hp.HParam("num units", hp.Discrete([32, 64, 128]))

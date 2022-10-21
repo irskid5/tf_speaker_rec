@@ -8,10 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow_datasets as tfds
 
-from tensorflow import keras
-from tensorflow.keras import layers
-
-from utils import plot_to_projector
+from test_code.tensorboard_tut.utils import plot_to_projector
 
 # Make sure we don't get any GPU errors
 physical_devices = tf.config.list_physical_devices("GPU")

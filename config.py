@@ -39,10 +39,14 @@ HP_STACK_SIZE = hp.HParam('stack_size', hp.Discrete([4]))
 # -------------------------------- Model -----------------------------------
 
 # LSTM encoding layer
-HP_NUM_LSTM_UNITS = hp.HParam('num_lstm_units', hp.Discrete([256]))
+HP_NUM_LSTM_UNITS = hp.HParam('num_lstm_units', hp.Discrete([256])) # 1024
+
+# IRNN layer
+HP_IRNN_STACK_SIZE = hp.HParam('irnn_stack_size', hp.Discrete([1]))
+HP_IRNN_IDENTITY_SCALE = hp.HParam('irnn_identity_scale', hp.Discrete([0.1]))
 
 # Attention aggregation layer
-HP_NUM_SELF_ATT_UNITS = hp.HParam('num_self_att_units', hp.Discrete([512]))
+HP_NUM_SELF_ATT_UNITS = hp.HParam('num_self_att_units', hp.Discrete([512])) # 1024
 HP_NUM_SELF_ATT_HOPS = hp.HParam('num_self_att_hops', hp.Discrete([4]))
 
 # Penultimate classification dense layers
@@ -54,7 +58,7 @@ HP_NUM_DENSE_UNITS = hp.HParam('num_dense_units', hp.Discrete([2048]))
 HP_BATCH_SIZE = hp.HParam('batch_size', hp.Discrete([64])) # , 64]))
 # HP_LR = hp.HParam('learning_rate', hp.Discrete([1e-3, 1e-4]))
 HP_LR = hp.HParam('learning_rate', hp.Discrete([1e-3]))
-HP_NUM_EPOCHS = hp.HParam('num_epochs', hp.Discrete([100]))
+HP_NUM_EPOCHS = hp.HParam('num_epochs', hp.Discrete([2000]))
 
 # Metrics
 METRIC_TRAIN_LOSS = 'train_loss'

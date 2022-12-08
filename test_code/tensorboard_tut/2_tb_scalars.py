@@ -71,12 +71,11 @@ def get_model():
     model = tf.keras.Sequential(
         [
             tf.keras.layers.Input((32, 32, 3)),
-            tf.keras.layers.Conv2D(8, 3, padding="same", activation="relu"),
-            tf.keras.layers.Conv2D(16, 3, padding="same", activation="relu"),
-            tf.keras.layers.MaxPooling2D((2, 2)),
+            tf.keras.layers.Reshape(target_shape=[32, 32*3]),
+            tf.keras.layers.SimpleRNN(128, use_bias=False, unroll=True, return_sequences=True),
+            tf.keras.layers.SimpleRNN(128, use_bias=False, unroll=True, return_sequences=True),
             tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(64, activation="relu"),
-            tf.keras.layers.Dropout(0.1),
+            tf.keras.layers.Dense(2048, use_bias=False),
             tf.keras.layers.Dense(10),
         ]
     )

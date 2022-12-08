@@ -1,6 +1,7 @@
 import tensorflow as tf
+import keras.backend as K
 import tensorflow_model_optimization as tfmot
-import qkeras
+from qkeras import *
 
 
 from tensorflow_model_optimization.python.core.quantization.keras.quantizers import *
@@ -19,18 +20,20 @@ def log_quantize_layer_lognet(x, num_bits=4, max=10, min=-10, hparams=None):
     # quantized = tf.cast(quantized, tf.float32)
     return out
 
-def log_quantize_layer_vele(x, num_bits=4, max=1, min=-6, hparams=None):
+def log_quantize_layer_vele(x, num_bits=4, max=1, min=-1, hparams=None):
     """
     Vele's version of log quant (in newer book notes)
     """
     sign = tf.sign(x)
     # delta_lsb = (max-min) / 2**num_bits
     # fsr = tf.experimental.numpy.log2(tf.constant(max - min, dtype=tf.float32))
-    logged = tf.experimental.numpy.log2(tf.math.abs(x))
-    rounded = tf.round(logged)
-    clipped = tf.clip_by_value(rounded, min, max)
-    translated = clipped + tf.abs(tf.constant(min, dtype=tf.float32))
-    out = sign * translated
+    logged = tf.experimental.numpy.log10(tf.math.abs(x))
+    rounded = logged + tf.stop_gradient(-logged + tf.round(logged))
+    bias = tf.reduce_mean(rounded)
+    bias = bias + tf.stop_gradient(-bias + tf.round(bias))
+    translated = rounded + tf.abs(bias)
+    out = translated + tf.stop_gradient(-translated + tf.clip_by_value(translated, 0, max))
+    out = sign * out
     # quantized = tf.cast(quantized, tf.float32)
     return out
 
@@ -69,10 +72,16 @@ def ternarize_tensor_with_threshold(x, theta=1, hparams=None):
     x = 0  if -threshold < x < threshold,
     x = 1  if x >= threshold
     """
-    quantized = tf.where(tf.less(x, -theta), -tf.ones_like(x), x)
-    quantized = tf.where(tf.less_equal(tf.math.abs(quantized), theta), tf.zeros_like(quantized), quantized)
-    quantized = tf.where(tf.greater(quantized, theta), tf.ones_like(quantized), quantized)
-    return x + tf.stop_gradient(-x + quantized)
+    q = K.cast(tf.abs(x) >= theta, K.floatx()) * tf.sign(x)
+    # q = K.cast(tf.abs(x) >= theta, K.floatx()) * x
+    return q
+
+def twn_ternarize_with_threshold(x, hparams=None):
+    """
+    Adapted from ArXiv:1605.04711v2 "Ternary Weight Networks"
+    """
+    thres = 0.7 * tf.reduce_mean(tf.abs(x))
+    return ternarize_tensor_with_threshold(x, theta=thres)
 
 def symmetric_qauntize_tensor(x, num_bits=4, max_range=1e-8, hparams=None):
     """
@@ -92,6 +101,120 @@ def quantize_over_range(x, num_bits=4):
     s = range / (2**(num_bits-1)-1)
     quantized = tf.round(x / s)
     return quantized
+
+class LearnedThresholdTernary(BaseQuantizer):
+    def __init__(
+        self, 
+        scale=0.7, 
+        threshold=None,
+        qnoise_factor=1.0,
+        var_name=None,
+        use_ste=True,
+        use_variables=False, 
+        name=""
+        ):
+
+        super(LearnedThresholdTernary, self).__init__()
+        self.bits = 2
+        # self.threshold = threshold
+        self.threshold = tf.Variable(
+            initial_value=tf.constant(0, dtype=tf.float32) if threshold is None else threshold,
+            trainable=False,
+            name=name+"/tern_threshold"
+        )
+        self.scale = scale
+        self.initialized = False
+        self.qnoise_factor = qnoise_factor
+        self.use_ste = use_ste
+        self.var_name = var_name
+        self.use_variables = use_variables
+    
+    def __call__(self, x):
+        if not self.built:
+            self.build(var_name=self.var_name, use_variables=self.use_variables)
+            self.threshold.assign(0.7 * tf.reduce_mean(tf.abs(x)))
+            # sorted = tf.sort(tf.reshape(tf.abs(x), shape=[-1]))
+            # t = sorted[int(np.ceil(0.33*len(sorted)))]
+            # self.threshold.assign(self.scale * t)
+            self.initialized = True
+        
+        xq = ternarize_tensor_with_threshold(x, theta=self.threshold)
+
+        if self.use_ste:
+            return x + tf.stop_gradient(self.qnoise_factor * (-x + xq))
+        else:
+            return (1 - self.qnoise_factor) * x + tf.stop_gradient(
+                self.qnoise_factor * xq)
+
+    def max(self):
+        """Get the maximum value that ternary can respresent."""
+        return 1.0
+
+    def min(self):
+        """Get the minimum value that ternary can respresent."""
+        return -1.0
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
+
+    def get_config(self):
+        config = {
+            "scale": self.scale,
+            "threshold": self.threshold,
+        }
+        return config
+
+class CustomLogarithmic(BaseQuantizer):
+    def __init__(
+        self,
+        max=1.0,
+        min=-1.0, 
+        scale=0.7, 
+        qnoise_factor=1.0,
+        var_name=None,
+        use_ste=False,
+        use_variables=False, 
+        name=""
+        ):
+
+        super(CustomLogarithmic, self).__init__()
+        self.bits = 4
+        self.maximum = max
+        self.minimum = min
+        self.scale = scale
+        self.initialized = False
+        self.qnoise_factor = qnoise_factor
+        self.use_ste = use_ste
+        self.var_name = var_name
+        self.use_variables = use_variables
+    
+    def __call__(self, x):
+        if not self.built:
+            # self.build(var_name=self.var_name, use_variables=self.use_variables)
+            self.initialized = True
+        
+        xq = log_quantize_layer_vele(x, max=self.maximum, min=self.minimum)
+
+        return xq
+
+    def max(self):
+        """Get the maximum value that ternary can respresent."""
+        return self.maximum + tf.abs(self.minimum)
+
+    def min(self):
+        """Get the minimum value that ternary can respresent."""
+        return -self.maximum - tf.abs(self.minimum)
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
+
+    def get_config(self):
+        config = {
+            "scale": self.scale,
+        }
+        return config
 
 class BinaryQuantizer(tfmot.quantization.keras.quantizers.Quantizer):
   """Quantizer which forces outputs to be -1 or 1."""

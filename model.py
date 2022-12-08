@@ -1,6 +1,5 @@
-from numpy import concatenate, std
-from operator import not_
 import tensorflow as tf
+import tensorflow_addons as tfa
 import keras.backend as K
 
 from data.voxceleb import *
@@ -258,6 +257,7 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     FRAME_LENGTH = int(hparams[HP_FRAME_LENGTH.name] * SAMPLE_RATE)
     FRAME_STEP = int(hparams[HP_FRAME_STEP.name] * SAMPLE_RATE)
     MAX_AUDIO_LENGTH = hparams[HP_MAX_NUM_FRAMES.name] * FRAME_STEP + FRAME_LENGTH - FRAME_STEP
+    SEED = hparams[HP_SEED.name]
     # NUM_MEL_BINS = hparams[HP_NUM_MEL_BINS.name]
 
     # Model parameters
@@ -269,40 +269,56 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     irnn_identity_scale = hparams[HP_IRNN_IDENTITY_SCALE.name]
     
     # Activation functions
-    activation_irnn = "relu"
-    activation_dense = "relu"
+    activation_irnn = tf.keras.activations.tanh
+    activation_dense = tf.keras.activations.tanh
 
     # Activation fns (quantized)
-    # activation_irnn = sign_with_htanh_deriv
-    # activation_dense = sign_with_htanh_deriv
+    # activation_irnn = sign_with_tanh_deriv
+    # activation_dense = sign_with_tanh_deriv
 
     # Regularizers (None for quantization I believe)
-    # kernel_regularizer = AdaptiveBinaryTernaryRegularizer(lm=1e-1) # TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001)
-    # recurrent_regularizer = AdaptiveBinaryTernaryRegularizer(lm=1e-1) # BinaryEuclideanRegularizer(l2=1e-6) #TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4)
+    kernel_regularizer = None # tf.keras.regularizers.L2(0.0001) # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001)
+    recurrent_regularizer = None # tf.keras.regularizers.L2(0.0001) # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # BinaryEuclideanRegularizer(l2=1e-6) #TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4)
     bias_regularizer = None
+    activation_regularizer = None # tf.keras.regularizers.L2(l2=0.0001)
 
     # Quantization functions (General)
-    kernel_quantizer = stochastic_ternary(alpha="auto_po2") # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
-    recurrent_quantizer = stochastic_ternary(alpha="auto_po2") # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
-    bias_quantizer = None # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
+    kernel_quantizer = None # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.01) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.7*tf.reduce_mean(tf.abs(x))) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
+    recurrent_quantizer = None # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.02) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.08) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
+    bias_quantizer = None # ternary(alpha=1) # quantized_bits(bits=8, integer=8, symmetric=1, keep_negative=True)
+
+    # Additions to code i.e. other hyperparameters
+    use_bias = False
+    add_dist_loss = False
+    norm = None
+    fold_batch_norm = False
+    soft_thresh_tern = False
+
+    # Initializers
+    rnn_kernel_initializer = tf.keras.initializers.VarianceScaling(scale=0.5 if soft_thresh_tern else 1.0, mode="fan_avg", distribution="uniform", seed=SEED) # "he_normal" is default 
+    rnn_recurrent_initializer = tf.keras.initializers.Orthogonal(gain=0.5 if soft_thresh_tern else 1.0, seed=SEED) # keep as None
+    dense_kernel_initializer = tf.keras.initializers.VarianceScaling(scale=1.0 if soft_thresh_tern else 2.0, mode="fan_in", distribution="truncated_normal", seed=SEED) # "he_normal" is default 
+    # bias_initializer = "ones"
 
     # Debug
     tf.print({
         "activation_irnn": activation_irnn,
         "activation_dense": activation_dense,
-        "kernel_regularizer": "AdaptiveBinaryTernaryRegularizer(lm=1e-1)",
-        "recurrent_regularizer": "AdaptiveBinaryTernaryRegularizer(lm=1e-1)",
+        "kernel_regularizer": kernel_regularizer,
+        "recurrent_regularizer": recurrent_regularizer,
         "bias_regularizer": bias_regularizer,
         "kernel_quantizer": kernel_quantizer,
         "recurrent_quantizer": recurrent_quantizer,
-        "bias_quantizer": bias_quantizer
+        "bias_quantizer": bias_quantizer,
+        # "kernel_initializer": kernel_initializer,
+        # "recurrent_initializer": recurrent_initializer
     })
 
     batch_size = None
     if stateful:
         batch_size = 1
 
-    input_shape = [None] # if inference else [MAX_AUDIO_LENGTH]
+    input_shape = [MAX_AUDIO_LENGTH] # if add_dist_loss else [None] #Because RNN unrolled only accepts distloss # if inference else [MAX_AUDIO_LENGTH]
 
     # Define model
     # Preprocessing layers (for on device) -------------------------------------------------
@@ -327,47 +343,60 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     #     dtype=dtype,
     #     name="QUANTIZE_STOCHASTIC_TERNARY"
     # )(encode_in)
-    encode_in = tf.keras.layers.Lambda(
-        lambda x: ternarize_tensor_with_threshold(x, theta=2/3*tf.reduce_mean(tf.abs(x))),
-        trainable=False,
-        dtype=dtype,
-        name="TERNARIZE_WITH_THRESHOLD"
-    )(encode_in)
+    # encode_in = tf.keras.layers.Lambda(
+    #     lambda x: tf.stop_gradient(ternarize_tensor_with_threshold(x, theta=0.7*tf.reduce_mean(tf.abs(x)))),
+    #     trainable=False,
+    #     dtype=dtype,
+    #     name="TERNARIZE_WITH_THRESHOLD"
+    # )(encode_in)
     # ---------------------------------------------------------------------------------------
 
     # Trainable layers ----------------------------------------------------------------------
     encode = QIRNN( 
-        cell=None,
+        cell=None, # do not change this
         units=num_lstm_units, 
         identity_scale=irnn_identity_scale,
         stacking_number=irnn_stack_size,
-        kernel_regularizer=None, # daptiveBinaryTernaryRegularizer(lm=1e-1, name="IRNN_0/kernel"),
-        recurrent_regularizer=None, # AdaptiveBinaryTernaryRegularizer(lm=1e-1, name="IRNN_0/recurrent"),
+        kernel_regularizer=kernel_regularizer, # if kernel_regularizer else AdaptiveBinaryTernaryRegularizer(lm=1e-1, name="IRNN_0/kernel"),
+        recurrent_regularizer=recurrent_regularizer, # if recurrent_regularizer else AdaptiveBinaryTernaryRegularizer(lm=1e-1, name="IRNN_0/recurrent"),
         bias_regularizer=bias_regularizer,
-        kernel_quantizer=kernel_quantizer,
-        recurrent_quantizer=recurrent_quantizer,
+        kernel_quantizer=kernel_quantizer, # LearnedThresholdTernary(scale=1.0, threshold=0.03, name="IRNN_0/quantized_kernel"), # 0.03
+        recurrent_quantizer=recurrent_quantizer, # LearnedThresholdTernary(scale=1.0, threshold=0.02, name="IRNN_0/quantized_recurrent"), # 0.02
         bias_quantizer=bias_quantizer,
-        activation=activation_irnn,
+        kernel_initializer=rnn_kernel_initializer,
+        recurrent_initializer=rnn_recurrent_initializer,
+        kernel_norm=norm,
+        recurrent_norm=norm,
+        activation=GeneralActivation(activation=activation_irnn, name="IRNN_0"), # don't make this global variable
+        use_bias=use_bias,
+        fold_batch_norm=fold_batch_norm,
+        add_dist_loss=add_dist_loss, # keep false does not work in rnn
         stateful=stateful,
+        soft_thresh_tern=soft_thresh_tern,
         name="IRNN_0")(encode_in)
     # encode = tf.keras.layers.Lambda(lambda x: tf.debugging.check_numerics(x, message="Found NaN or Inf in "+str(x)), name="CHK_"+"IRNN_0")(encode)
     encode = TimeReduction(reduction_factor=2, batch_size=batch_size, name="TIME_REDUCTION_E")(encode)
     encode = QIRNN(
-        cell=None,
+        cell=None, # do not change this
         units=num_lstm_units, 
         identity_scale=irnn_identity_scale,
         stacking_number=irnn_stack_size,
-        kernel_regularizer=None, # AdaptiveBinaryTernaryRegularizer(lm=1e-1, name="IRNN_1/kernel"),
-        recurrent_regularizer=None, # AdaptiveBinaryTernaryRegularizer(lm=1e-1, name="IRNN_1/recurrent"),
+        kernel_regularizer=kernel_regularizer, # if kernel_regularizer else AdaptiveBinaryTernaryRegularizer(lm=1e-1, name="IRNN_1/kernel"),
+        recurrent_regularizer=recurrent_regularizer, # if recurrent_regularizer else AdaptiveBinaryTernaryRegularizer(lm=1e-1, name="IRNN_1/recurrent"),
         bias_regularizer=bias_regularizer,
-        kernel_quantizer=kernel_quantizer,
-        recurrent_quantizer=recurrent_quantizer,
+        kernel_quantizer=kernel_quantizer, # LearnedThresholdTernary(scale=1.0, threshold=0.02, name="IRNN_1/quantized_kernel"), # 0.02
+        recurrent_quantizer=recurrent_quantizer, # LearnedThresholdTernary(scale=1.0, threshold=0.02, name="IRNN_1/quantized_recurrent"), # 0.02
         bias_quantizer=bias_quantizer,
-        kernel_initializer=None,
-        recurrent_initializer=None,
-        bias_initializer=None,
-        activation=activation_irnn,
+        kernel_initializer=rnn_kernel_initializer,
+        recurrent_initializer=rnn_recurrent_initializer,
+        kernel_norm=norm,
+        recurrent_norm=norm,
+        activation=GeneralActivation(activation=activation_irnn, name="IRNN_1"),
+        use_bias=use_bias,
+        fold_batch_norm=fold_batch_norm,
+        add_dist_loss=add_dist_loss, # keep false does not work in rnn
         stateful=stateful,
+        soft_thresh_tern=soft_thresh_tern,
         name="IRNN_1")(encode)
     # encode = tf.keras.layers.Lambda(lambda x: tf.debugging.check_numerics(x, message="Found NaN or Inf"), name="CHK_"+"IRNN_1")(encode)
     # SA Layer
@@ -375,32 +404,48 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
         num_self_att_hops, 
         num_self_att_units, 
         encode, 
-        kernel_regularizer=None,
-        bias_regularizer=None,
+        kernel_regularizer=kernel_regularizer, # if kernel_regularizer else None,
+        bias_regularizer=bias_regularizer, # if bias_regularizer else None,
         kernel_quantizer=kernel_quantizer,
         bias_quantizer=bias_quantizer,
-        kernel_initializer=None,
+        kernel_initializer=dense_kernel_initializer,
         bias_initializer=None,
         activation=activation_dense,
+        use_bias=use_bias,
+        norm=norm,
+        fold_batch_norm=fold_batch_norm,
+        add_dist_loss=add_dist_loss,
+        soft_thresh_tern=soft_thresh_tern,
         name="SA_0")
     # sa_output = tf.keras.layers.Lambda(lambda x: tf.debugging.check_numerics(x, message="Found NaN or Inf"), name="CHK_"+"SA_0_OUTPUT")(sa_output)
-    output_proj = QDense(
+    output_proj = QDenseWithNorm(
         num_dense_units, 
-        kernel_regularizer=AdaptiveBinaryTernaryRegularizer(lm=1e-1, name="DENSE_0"),
+        kernel_regularizer=kernel_regularizer, # if kernel_regularizer else AdaptiveBinaryTernaryRegularizer(lm=1e-1, name="DENSE_0"),
         bias_regularizer=bias_regularizer, 
-        kernel_quantizer=kernel_quantizer,
+        kernel_quantizer=kernel_quantizer, # LearnedThresholdTernary(scale=1.0, threshold=0.01, name="DENSE_0"), # 0.02
         bias_quantizer=bias_quantizer,
-        activation=activation_dense, 
+        kernel_initializer=dense_kernel_initializer,
+        activation=GeneralActivation(activation=activation_dense, name="DENSE_0"), # PACT(regularizer=activation_regularizer, name="DENSE_0"),
+        use_bias=use_bias,
+        norm=norm,
+        fold_batch_norm=fold_batch_norm,
+        add_dist_loss=add_dist_loss, # add_dist_loss, CHANGE BACK,
+        soft_thresh_tern=soft_thresh_tern,
         name="DENSE_0")(sa_output)
     # output_proj = tf.keras.layers.Lambda(lambda x: tf.debugging.check_numerics(x, message="Found NaN or Inf"), name="CHK_"+"DENSE_0")(output_proj)
     # Output logits layers
-    output = QDense(
+    output = QDenseWithNorm(
         num_classes, 
-        activation=None, 
-        kernel_regularizer=AdaptiveBinaryTernaryRegularizer(lm=1e-1, name="DENSE_OUT"),
+        activation=GeneralActivation(activation=tf.keras.activations.softmax, name="DENSE_OUT"), 
+        kernel_initializer=dense_kernel_initializer,
+        kernel_regularizer=kernel_regularizer, # if kernel_regularizer else AdaptiveBinaryTernaryRegularizer(lm=1e-1, name="DENSE_OUT"),
         bias_regularizer=bias_regularizer, 
-        kernel_quantizer=kernel_quantizer,
+        kernel_quantizer=kernel_quantizer, # LearnedThresholdTernary(scale=1.0, threshold=0.02, name="DENSE_OUT"), # 0.03
         bias_quantizer=bias_quantizer,
+        use_bias=use_bias,
+        norm=norm,
+        add_dist_loss=False,
+        soft_thresh_tern=soft_thresh_tern,
         name="DENSE_OUT")(output_proj)
 
     # output = tf.keras.layers.Lambda(lambda x: tf.debugging.check_numerics(x, message="Found NaN or Inf"), name="DENSE_OUT")(output)

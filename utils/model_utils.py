@@ -1,6 +1,6 @@
-import imp
 from math import pi
 import tensorflow as tf
+import tensorflow_addons as tfa
 import keras.backend as K
 import numpy as np
 # GENERAL UTILS
@@ -79,38 +79,174 @@ class QIRNN(tf.keras.layers.RNN):
         kernel_quantizer=None,
         recurrent_quantizer=None,
         bias_quantizer=None,
-        kernel_initializer=None,
-        recurrent_initializer=None,
+        kernel_initializer='glorot_uniform',
+        recurrent_initializer='orthogonal',
         bias_initializer=None,
+        kernel_norm=None,
+        recurrent_norm=None,
+        use_bias=False,
+        add_dist_loss=False,
+        fold_batch_norm=False,
+        soft_thresh_tern=False,
         name="", **kwargs):
-        cell = tf.keras.layers.StackedRNNCells([QSimpleRNNCell(
+        
+        # Which init are we using?
+        k_init = kernel_initializer # 'glorot_uniform'
+        rk_init = recurrent_initializer # 'orthogonal'
+        # k_init = tf.keras.initializers.RandomNormal(mean=0, stddev=0.001) if not kernel_initializer else kernel_initializer
+        # rk_init = tf.keras.initializers.Identity(gain=identity_scale) if not recurrent_initializer else recurrent_initializer
+
+        # Normalizers
+        if kernel_norm == "batch_norm":
+            self.kernel_norm = tf.keras.layers.BatchNormalization()
+        elif kernel_norm == "layer_norm":
+            self.kernel_norm = tf.keras.layers.LayerNormalization()
+        else:
+            self.kernel_norm = None
+
+        if recurrent_norm == "batch_norm":
+            self.recurrent_norm = tf.keras.layers.BatchNormalization()
+        elif recurrent_norm == "layer_norm":
+            self.recurrent_norm = tf.keras.layers.LayerNormalization()
+        else:
+            self.recurrent_norm = None
+
+        self.add_dist_loss = add_dist_loss
+        self.fold_batch_norm = fold_batch_norm
+        self.soft_thresh_tern = soft_thresh_tern
+        
+        cell = QSimpleRNNCellWithNorm(
                     units,
                     activation=activation,
-                    kernel_initializer=tf.keras.initializers.RandomNormal(mean=0, stddev=0.001),
-                    recurrent_initializer=tf.keras.initializers.Identity(gain=identity_scale),
+                    kernel_initializer=k_init,
+                    recurrent_initializer=rk_init,
                     kernel_regularizer=kernel_regularizer,
                     recurrent_regularizer=recurrent_regularizer,
                     bias_regularizer=bias_regularizer,
                     kernel_quantizer=kernel_quantizer,
                     recurrent_quantizer=recurrent_quantizer,
                     bias_quantizer=bias_quantizer,
-                ) for _ in range(stacking_number)]) if not cell else cell 
+                    kernel_norm=self.kernel_norm,
+                    recurrent_norm=self.recurrent_norm,
+                    use_bias=use_bias,
+                    add_dist_loss=add_dist_loss,
+                    fold_batch_norm=fold_batch_norm,
+                    soft_thresh_tern=soft_thresh_tern,
+                ) if not cell else cell 
             
-        super(QIRNN, self).__init__(cell, return_sequences=True, stateful=stateful, name=name)
+        super(QIRNN, self).__init__(cell, return_sequences=True, stateful=stateful, unroll=add_dist_loss, name=name)
+        
+        # IRNN Specific
         self.identity_scale = identity_scale
         self.stacking_number = stacking_number
-        self.kernel_regularizer = kernel_regularizer
-        self.recurrent_regularizer = recurrent_regularizer
-        self.bias_regularizer = bias_regularizer
-        self.kernel_quantizer = kernel_quantizer
-        self.recurrent_quantizer = recurrent_quantizer
-        self.bias_quantizer = bias_quantizer
+        
+        # Initializers
+        self.kernel_initializer = k_init
+        self.recurrent_initializer = rk_init
+
+        # Quantizers (specfically for QNoiseScheduler)
+        self.quantizers = self.get_quantizers()
+
+    # def build(self, input_shape):
+    #     super(QIRNN, self).build(input_shape)
+    #     if self.kernel_norm:
+    #         self.kernel_norm.build(input_shape)
+    #     if self.recurrent_norm:
+    #         self.recurrent_norm.build(input_shape)
+
+    def get_quantizers(self):
+        return self.cell.quantizers
+
+    def get_prunable_weights(self):
+        return [self.cell.kernel, self.cell.recurrent_kernel]
+
+    @property
+    def units(self):
+        return self.cell.units
+
+    @property
+    def activation(self):
+        return self.cell.activation
+
+    @property
+    def use_bias(self):
+        return self.cell.use_bias
+
+    @property
+    def bias_initializer(self):
+        return self.cell.bias_initializer
+
+    @property
+    def kernel_regularizer(self):
+        return self.cell.kernel_regularizer
+
+    @property
+    def recurrent_regularizer(self):
+        return self.cell.recurrent_regularizer
+
+    @property
+    def bias_regularizer(self):
+        return self.cell.bias_regularizer
+
+    @property
+    def kernel_constraint(self):
+        return self.cell.kernel_constraint
+
+    @property
+    def recurrent_constraint(self):
+        return self.cell.recurrent_constraint
+
+    @property
+    def bias_constraint(self):
+        return self.cell.bias_constraint
+
+    @property
+    def kernel_quantizer_internal(self):
+        return self.cell.kernel_quantizer_internal
+
+    @property
+    def recurrent_quantizer_internal(self):
+        return self.cell.recurrent_quantizer_internal
+
+    @property
+    def bias_quantizer_internal(self):
+        return self.cell.bias_quantizer_internal
+
+    @property
+    def state_quantizer_internal(self):
+        return self.cell.state_quantizer_internal
+
+    @property
+    def kernel_quantizer(self):
+        return self.cell.kernel_quantizer
+
+    @property
+    def recurrent_quantizer(self):
+        return self.cell.recurrent_quantizer
+
+    @property
+    def bias_quantizer(self):
+        return self.cell.bias_quantizer
+
+    @property
+    def state_quantizer(self):
+        return self.cell.state_quantizer
+
+    @property
+    def dropout(self):
+        return self.cell.dropout
+
+    @property
+    def recurrent_dropout(self):
+        return self.cell.recurrent_dropout
 
     def get_config(self):
         config = super().get_config()
         config.update({
             "identity_scale": self.identity_scale,
             "stacking_number": self.stacking_number,
+            "kernel_initializer": self.kernel_initializer,
+            "recurrent_initializer": self.recurrent_initializer,
             "kernel_regularizer": self.kernel_regularizer,
             "recurrent_regularizer": self.recurrent_regularizer,
             "bias_regularizer": self.bias_regularizer,
@@ -150,16 +286,592 @@ class IRNNWithProjection(tf.keras.layers.RNN):
         })
         return config
 
-@tf.custom_gradient
+class QSimpleRNNCellWithNorm(QSimpleRNNCell):
+    """
+    Cell class for the QSimpleRNNCell layer with added Norm function for Wx.
+    """
+    def __init__(self,
+                units,
+                activation='quantized_tanh',
+                use_bias=False,
+                kernel_initializer='glorot_uniform',
+                recurrent_initializer='orthogonal',
+                bias_initializer='zeros',
+                kernel_regularizer=None,
+                recurrent_regularizer=None,
+                bias_regularizer=None,
+                kernel_constraint=None,
+                recurrent_constraint=None,
+                bias_constraint=None,
+                kernel_quantizer=None,
+                recurrent_quantizer=None,
+                bias_quantizer=None,
+                state_quantizer=None,
+                dropout=0.,
+                recurrent_dropout=0.,
+                kernel_norm=None,
+                recurrent_norm=None,
+                add_dist_loss=False,
+                fold_batch_norm=False,
+                soft_thresh_tern=False,
+                **kwargs):
+
+        super(QSimpleRNNCellWithNorm, self).__init__(
+            units=units,
+            activation=activation,
+            use_bias=use_bias,
+            kernel_initializer=kernel_initializer,
+            recurrent_initializer=recurrent_initializer,
+            bias_initializer=bias_initializer,
+            kernel_regularizer=kernel_regularizer,
+            recurrent_regularizer=recurrent_regularizer,
+            bias_regularizer=bias_regularizer,
+            kernel_constraint=kernel_constraint,
+            recurrent_constraint=recurrent_constraint,
+            bias_constraint=bias_constraint,
+            kernel_quantizer=kernel_quantizer,
+            recurrent_quantizer=recurrent_quantizer,
+            bias_quantizer=bias_quantizer,
+            state_quantizer=state_quantizer,
+            dropout=dropout,
+            recurrent_dropout=recurrent_dropout,
+            **kwargs
+        )
+        
+        self.kernel_norm = kernel_norm
+        self.recurrent_norm = recurrent_norm
+        
+        self.fold_batch_norm = fold_batch_norm
+
+        # If folding, freeze BN
+        if self.kernel_norm is not None:
+            if self.fold_batch_norm:
+                self.kernel_norm.trainable = False
+        if self.recurrent_norm is not None:
+            if self.fold_batch_norm:
+                self.recurrent_norm.trainable = False
+
+        self.dist_loss = None
+        if add_dist_loss:
+            self.dist_loss = DistributionLossLayer()
+        
+        self.soft_thresh_tern = soft_thresh_tern
+  
+    def build(self, input_shape):
+        super(QSimpleRNNCellWithNorm, self).build(input_shape)
+        if self.kernel_norm is not None:
+            norm_input_shape = list(input_shape)
+            norm_input_shape[-1] = self.kernel.shape[-1] # since norm is applied to Wx, not x
+            self.kernel_norm.build(norm_input_shape)
+        if self.recurrent_norm is not None:
+            norm_input_shape = list(input_shape)
+            norm_input_shape[-1] = self.recurrent_kernel.shape[-1] # since norm is applied to Wx, not x
+            self.recurrent_norm.build(norm_input_shape)
+        
+        # For debugging to see quantized kernels
+        if self.kernel_quantizer:
+            self.quantized_kernel = self.add_weight(
+                name="quantized_kernel",
+                shape=self.kernel.shape,
+                dtype=self.kernel.dtype,
+                initializer="zeros",
+                trainable=False
+            )
+        if self.recurrent_quantizer:
+            self.quantized_recurrent_kernel = self.add_weight(
+                name="quantized_recurrent_kernel",
+                shape=self.recurrent_kernel.shape,
+                dtype=self.recurrent_kernel.dtype,
+                initializer="zeros",
+                trainable=False
+            )
+        if self.kernel_norm is not None:
+            if self.fold_batch_norm:
+                self.folded_kernel = self.add_weight(
+                    name="folded_kernel",
+                    shape=self.kernel.shape,
+                    dtype=self.kernel.dtype,
+                    initializer="zeros",
+                    trainable=False
+                )
+            self.delta_kernel_norm = self.add_weight(
+                name="delta_kernel_norm",
+                shape=[self.units],
+                dtype=self.kernel.dtype,
+                initializer="zeros",
+                trainable=True
+            )
+        if self.recurrent_norm is not None:
+            if self.fold_batch_norm:
+                self.folded_recurrent_kernel = self.add_weight(
+                    name="folded_recurrent_kernel",
+                    shape=self.recurrent_kernel.shape,
+                    dtype=self.recurrent_kernel.dtype,
+                    initializer="zeros",
+                    trainable=False
+                )
+            self.delta_recurrent_kernel_norm = self.add_weight(
+                name="delta_recurrent_kernel_norm",
+                shape=[self.units],
+                dtype=self.recurrent_kernel.dtype,
+                initializer="zeros",
+                trainable=True
+            )
+
+        self.wx = self.add_weight(
+            name="wx",
+            shape=[self.units],
+            dtype=self.kernel.dtype,
+            initializer="zeros",
+            trainable=False
+        )
+
+        self.wh = self.add_weight(
+            name="wh",
+            shape=[self.units],
+            dtype=self.kernel.dtype,
+            initializer="zeros",
+            trainable=False
+        )
+
+        if self.soft_thresh_tern:
+            self.kernel_2 = self.add_weight(
+                name="kernel_2",
+                shape=self.kernel.shape,
+                dtype=self.kernel.dtype,
+                initializer=self.kernel_initializer,
+                regularizer=self.kernel_regularizer,
+                trainable=True
+            )
+            self.kernel_2.assign(tf.random.shuffle(self.kernel_2))
+            self.recurrent_kernel_2 = self.add_weight(
+                name="recurrent_kernel_2",
+                shape=self.recurrent_kernel.shape,
+                dtype=self.recurrent_kernel.dtype,
+                initializer=self.recurrent_initializer,
+                regularizer=self.recurrent_regularizer,
+                trainable=True
+            )
+            self.recurrent_kernel_2.assign(tf.random.shuffle(self.recurrent_kernel_2))
+            if self.kernel_quantizer:
+                self.quantized_kernel_2 = self.add_weight(
+                    name="quantized_kernel_2",
+                    shape=self.kernel.shape,
+                    dtype=self.kernel.dtype,
+                    initializer="zeros",
+                    trainable=False
+                )
+            if self.recurrent_quantizer:
+                self.quantized_recurrent_kernel_2 = self.add_weight(
+                    name="quantized_recurrent_kernel_2",
+                    shape=self.recurrent_kernel.shape,
+                    dtype=self.recurrent_kernel.dtype,
+                    initializer="zeros",
+                    trainable=False
+                )
+            self.combined_kernel = self.add_weight(
+                name="combined_kernel",
+                shape=self.kernel.shape,
+                dtype=self.kernel.dtype,
+                initializer="zeros",
+                trainable=False
+            )
+            self.combined_recurrent_kernel = self.add_weight(
+                name="combined_recurrent_kernel",
+                shape=self.recurrent_kernel.shape,
+                dtype=self.recurrent_kernel.dtype,
+                initializer="zeros",
+                trainable=False
+            )
+
+    def call(self, inputs, states, training=None):
+        prev_output = states[0] if nest.is_sequence(states) else states
+
+        # Dropout mask
+        dp_mask = self.get_dropout_mask_for_cell(inputs, training)
+        rec_dp_mask = self.get_recurrent_dropout_mask_for_cell(
+            prev_output, training)
+
+        # Quantize the state
+        if self.state_quantizer:
+            quantized_prev_output = self.state_quantizer_internal(prev_output)
+        else:
+            quantized_prev_output = prev_output
+
+        # Fold frozen BN into weights (this won't work with self.soft_thresh_tern on)
+        folded_kernel = self.kernel
+        if self.kernel_norm is not None:
+            if self.fold_batch_norm:
+                folded_kernel = folded_kernel * self.kernel_norm.gamma / tf.math.sqrt(self.kernel_norm.moving_variance + self.kernel_norm.epsilon)
+                # For debugging to see folded kernel
+                self.folded_kernel.assign(folded_kernel)
+        folded_recurrent_kernel = self.recurrent_kernel
+        if self.recurrent_norm is not None:
+            if self.fold_batch_norm:
+                folded_recurrent_kernel = folded_recurrent_kernel * self.recurrent_norm.gamma / tf.math.sqrt(self.recurrent_norm.moving_variance + self.recurrent_norm.epsilon)
+                # For debugging to see folded kernel
+                self.folded_recurrent_kernel.assign(folded_recurrent_kernel)
+
+        # Quantize the kernel(s)
+        if self.kernel_quantizer:
+            quantized_kernel = self.kernel_quantizer_internal(folded_kernel)
+            # For debugging to see quantized kernel
+            self.quantized_kernel.assign(quantized_kernel)
+            
+            # Quantize the second kernel for soft threshold ternarization
+            if self.soft_thresh_tern:
+                quantized_kernel_2 = self.kernel_quantizer_internal(self.kernel_2)
+                self.quantized_kernel_2.assign(quantized_kernel_2)
+                quantized_kernel -= quantized_kernel_2
+                self.combined_kernel.assign(quantized_kernel)
+        else:
+            quantized_kernel = folded_kernel
+            
+            # Combine both kernels for soft threshold ternarization
+            if self.soft_thresh_tern:
+                quantized_kernel_2 = self.kernel_2
+                quantized_kernel -= quantized_kernel_2
+                self.combined_kernel.assign(quantized_kernel)
+
+        # Add dropout mask if not none
+        if dp_mask is not None:
+            h = K.dot(inputs * dp_mask, quantized_kernel)
+        else:
+            h = K.dot(inputs, quantized_kernel)
+        if rec_dp_mask is not None:
+            quantized_prev_output = quantized_prev_output * rec_dp_mask
+
+        # Quantize recurrent kernel
+        if self.recurrent_quantizer:
+            quantized_recurrent = self.recurrent_quantizer_internal(folded_recurrent_kernel)
+            # For debugging to see quantized kernel
+            self.quantized_recurrent_kernel.assign(quantized_recurrent)
+
+            # Quantize the second kernel for soft threshold ternarization and combine both
+            if self.soft_thresh_tern:
+                quantized_recurrent_2 = self.recurrent_quantizer_internal(self.recurrent_kernel_2)
+                self.quantized_recurrent_kernel_2.assign(quantized_recurrent_2)
+                quantized_recurrent -= quantized_recurrent_2
+                self.combined_recurrent_kernel.assign(quantized_recurrent)
+        else:
+            quantized_recurrent = folded_recurrent_kernel
+            
+            # Combine both kernels for soft threshold ternarization
+            if self.soft_thresh_tern:
+                quantized_recurrent_2 = self.recurrent_kernel_2
+                quantized_recurrent -= quantized_recurrent_2
+                self.combined_recurrent_kernel.assign(quantized_recurrent)
+
+        # Calculate h_2
+        h_2 = K.dot(quantized_prev_output, quantized_recurrent)
+
+        # Update stats
+        self.wx.assign(0.99*self.wx + 0.01*tf.reduce_mean(h, axis=0))
+        self.wh.assign(0.99*self.wh + 0.01*tf.reduce_mean(h_2, axis=0))
+
+        # Compute norm if applicable
+        h_norm = h
+        h_2_norm = h_2
+        if self.kernel_norm:
+            if not self.fold_batch_norm:
+                # h_norm = self.kernel_norm(h)
+                # Record the diff between normed and not normed 
+                # self.delta_kernel_norm.assign(0.99*self.delta_kernel_norm + 0.01*(tf.reduce_mean(h, axis=0) - tf.reduce_mean(h_norm, axis=0)))
+                h_norm = h - self.delta_kernel_norm + tf.stop_gradient(self.delta_kernel_norm-2000*self.delta_kernel_norm)
+        if self.recurrent_norm:
+            if not self.fold_batch_norm:
+                # h_2_norm = self.recurrent_norm(h_2)
+                # Record the diff between normed and not normed 
+                # self.delta_recurrent_kernel_norm.assign(0.99*self.delta_recurrent_kernel_norm + 0.01*(tf.reduce_mean(h_2, axis=0) - tf.reduce_mean(h_2_norm, axis=0)))
+                h_2_norm = h_2 - self.delta_recurrent_kernel_norm + tf.stop_gradient(self.delta_recurrent_kernel_norm-2000*self.delta_recurrent_kernel_norm)
+
+        # Add two dot products (W_x*x + W_h*h)
+        # Division is to control the gradient but output is h_norm + h_2_norm
+        s = 1 # 1000 worked for quant
+        output = h_norm/s + h_2_norm/s + tf.stop_gradient(-h_norm/s - h_2_norm/s + h_norm + h_2_norm)
+
+        # Add bias if applicable 
+        if self.bias is not None:
+            # Fold the bias if folding BN
+            # TODO
+            # Quantize the bias
+            if self.bias_quantizer:
+                quantized_bias = self.bias_quantizer_internal(self.bias)
+            else:
+                quantized_bias = self.bias
+
+            output = K.bias_add(output, quantized_bias)
+        else:   
+            # Add the beta terms from both norms, or either norm
+            if (self.kernel_norm is not None) or (self.recurrent_norm is not None):
+                if self.fold_batch_norm:
+                    # Add folded beta to output if folding batch norm
+                    folded_kernel_bias = 0
+                    folded_recurrent_bias = 0
+                    if self.kernel_norm is not None:
+                            folded_kernel_bias = self.kernel_norm.beta - self.kernel_norm.moving_mean * self.kernel_norm.gamma / tf.math.sqrt(self.kernel_norm.moving_variance + self.kernel_norm.epsilon)
+                    if self.recurrent_norm is not None:
+                            folded_recurrent_bias = self.recurrent_norm.beta - self.recurrent_norm.moving_mean * self.recurrent_norm.gamma / tf.math.sqrt(self.recurrent_norm.moving_variance + self.recurrent_norm.epsilon)
+
+                    # Combine folded biases
+                    folded_bias = folded_kernel_bias + folded_recurrent_bias
+                    
+                    if self.bias_quantizer:
+                        quantized_bias = self.bias_quantizer_internal(folded_bias)
+                    else:
+                        quantized_bias = folded_bias
+
+                    output = K.bias_add(output, quantized_bias)
+
+        # Finally compute the activation
+        if self.activation is not None:
+            # Add distribution loss if applicable
+            if self.dist_loss is not None:
+                output = self.dist_loss(output)
+            output = self.activation(output)
+
+        return output, [output]
+
+class QDenseWithNorm(QDense):
+    """Implements a quantized Dense layer WITH NORMALIZATION."""
+
+    def __init__(self,
+                units,
+                activation=None,
+                use_bias=True,
+                kernel_initializer="he_normal",
+                bias_initializer="zeros",
+                kernel_regularizer=None,
+                bias_regularizer=None,
+                activity_regularizer=None,
+                kernel_constraint=None,
+                bias_constraint=None,
+                kernel_quantizer=None,
+                bias_quantizer=None,
+                kernel_range=None,
+                bias_range=None,
+                norm=None,
+                add_dist_loss=True,
+                fold_batch_norm=False,
+                soft_thresh_tern=False,
+                **kwargs):
+
+        self.norm = None
+        if norm == "batch_norm":
+            self.norm = tf.keras.layers.BatchNormalization()
+        
+        self.dist_loss = None
+        if add_dist_loss:
+            self.dist_loss = DistributionLossLayer()
+
+        self.fold_batch_norm = fold_batch_norm
+
+        # If folding, freeze BN
+        if self.norm is not None:
+            if self.fold_batch_norm:
+                self.norm.trainable = False
+
+        # Soft Threshold Ternarization
+        self.soft_thresh_tern = soft_thresh_tern
+
+        super(QDenseWithNorm, self).__init__(
+            units=units,
+            activation=activation,
+            use_bias=use_bias,
+            kernel_initializer=kernel_initializer,
+            bias_initializer=bias_initializer,
+            kernel_regularizer=kernel_regularizer,
+            bias_regularizer=bias_regularizer,
+            activity_regularizer=activity_regularizer,
+            kernel_constraint=kernel_constraint,
+            bias_constraint=bias_constraint,
+            kernel_quantizer=kernel_quantizer,
+            bias_quantizer=bias_quantizer,
+            kernel_range=kernel_range,
+            bias_range=bias_range,
+            **kwargs)
+
+    def build(self, input_shape):
+        super(QDenseWithNorm, self).build(input_shape)
+        if self.norm is not None:
+            norm_input_shape = input_shape.as_list() 
+            norm_input_shape[-1]= self.kernel.shape[-1] # since norm is applied to Wx, not x
+            self.norm.build(norm_input_shape)
+        
+        # For debugging to see quantized kernel
+        if self.kernel_quantizer:
+            self.quantized_kernel = self.add_weight(
+                name="quantized_kernel",
+                shape=self.kernel.shape,
+                dtype=self.kernel.dtype,
+                initializer="zeros",
+                trainable=False
+            )
+
+        if self.soft_thresh_tern:
+            self.kernel_2 = self.add_weight(
+                name="kernel_2",
+                shape=self.kernel.shape,
+                dtype=self.kernel.dtype,
+                initializer=self.kernel_initializer,
+                regularizer=self.kernel_regularizer,
+                trainable=True
+            )
+            self.kernel_2.assign(tf.random.shuffle(self.kernel_2))
+
+            if self.kernel_quantizer:
+                self.quantized_kernel_2 = self.add_weight(
+                    name="quantized_kernel_2",
+                    shape=self.kernel.shape,
+                    dtype=self.kernel.dtype,
+                    initializer="zeros",
+                    trainable=False
+                )
+            self.combined_kernel = self.add_weight(
+                name="combined_kernel",
+                shape=self.kernel.shape,
+                dtype=self.kernel.dtype,
+                initializer="zeros",
+                trainable=False
+            )
+        
+        if self.norm is not None:
+            if self.fold_batch_norm:
+                self.folded_kernel = self.add_weight(
+                    name="folded_kernel",
+                    shape=self.kernel.shape,
+                    dtype=self.kernel.dtype,
+                    initializer="zeros",
+                    trainable=False
+                )
+            self.delta_kernel_norm = self.add_weight(
+                name="delta_kernel_norm",
+                shape=[self.units],
+                dtype=self.kernel.dtype,
+                initializer="zeros",
+                trainable=True
+            )
+
+        self.wx = self.add_weight(
+            name="wx",
+            shape=[self.units],
+            dtype=self.kernel.dtype,
+            initializer="zeros",
+            trainable=False
+        )
+
+        self.x_input = self.add_weight(
+            name="x",
+            shape=[input_shape[-1]],
+            dtype=self.kernel.dtype,
+            initializer="zeros",
+            trainable=False
+        )
+
+    
+    def call(self, inputs):
+        # Write input stats (mainly for SA mult)
+        reduce_dims = tf.range(0, tf.rank(inputs)-1)
+        self.x_input.assign(0.99*self.x_input + 0.01*tf.reduce_mean(inputs, axis=reduce_dims)) 
+        
+        # Fold frozen BN into weights
+        folded_kernel = self.kernel
+        if self.norm is not None:
+            if self.fold_batch_norm:
+                folded_kernel = folded_kernel * self.norm.gamma / tf.math.sqrt(self.norm.moving_variance + self.norm.epsilon)
+                # For debugging to see folded kernel
+                self.folded_kernel.assign(folded_kernel)
+
+        # Quantize the kernel
+        if self.kernel_quantizer:
+            quantized_kernel = self.kernel_quantizer_internal(folded_kernel)
+            # For debugging to see quantized kernel
+            self.quantized_kernel.assign(quantized_kernel)
+
+            # Quantize the second kernel for soft threshold ternarization
+            if self.soft_thresh_tern:
+                quantized_kernel_2 = self.kernel_quantizer_internal(self.kernel_2)
+                self.quantized_kernel_2.assign(quantized_kernel_2)
+                quantized_kernel -= quantized_kernel_2
+                self.combined_kernel.assign(quantized_kernel)
+        else:
+            quantized_kernel = folded_kernel
+
+            # Combine the kernels for soft threshold ternarization
+            if self.soft_thresh_tern:
+                quantized_kernel_2 = self.kernel_2
+                quantized_kernel -= quantized_kernel_2
+                self.combined_kernel.assign(quantized_kernel)
+
+        # Calculate Wx
+        h = tf.keras.backend.dot(inputs, quantized_kernel)
+
+        # Norm gradients
+        s = 1 # 1000 worked for quant
+        h = h/s + tf.stop_gradient(-h/s + h)
+
+        # Update stats
+        reduce_dims = tf.range(0, tf.rank(h)-1)
+        self.wx.assign(0.99*self.wx + 0.01*tf.reduce_mean(h, axis=reduce_dims)) 
+        
+        output = h
+        # Add bias if using bias
+        if self.use_bias:
+            # Fold the bias if folding BN
+            folded_bias = self.bias
+            if self.norm is not None:
+                if self.fold_batch_norm:
+                    folded_bias = self.norm.gamma * (folded_bias - self.norm.moving_mean) / tf.math.sqrt(self.norm.moving_variance + self.norm.epsilon) + self.norm.beta
+            
+            # Quantize bias
+            if self.bias_quantizer:
+                quantized_bias = self.bias_quantizer_internal(folded_bias)
+            else:
+                quantized_bias = folded_bias
+            
+            # Add bias to output (Wx + b)
+            output = tf.keras.backend.bias_add(output, quantized_bias,
+                                            data_format="channels_last")
+        else:   
+            # Add folded beta to output if folding batch norm
+            if self.norm is not None:
+                if self.fold_batch_norm:
+                    folded_bias = self.norm.beta - self.norm.moving_mean * self.norm.gamma / tf.math.sqrt(self.norm.moving_variance + self.norm.epsilon)
+                    # Quantize bias
+                    if self.bias_quantizer:
+                        quantized_bias = self.bias_quantizer_internal(folded_bias)
+                    else:
+                        quantized_bias = folded_bias
+                    
+                    # Add bias to output (Wx + b)
+                    output = tf.keras.backend.bias_add(output, quantized_bias,
+                                                    data_format="channels_last")
+
+        # Normalize if no batch norm folding
+        if self.norm is not None:
+            if not self.fold_batch_norm:
+                output = self.norm(output)
+                # Record the diff between normed and not normed 
+                # reduceDims = tf.range(0, tf.rank(h)-1)
+                # self.delta_kernel_norm.assign(0.99*self.delta_kernel_norm + 0.01*(tf.reduce_mean(h, axis=reduceDims) - tf.reduce_mean(output, axis=reduceDims)))
+                # output = output - self.delta_kernel_norm + tf.stop_gradient(self.delta_kernel_norm-2000*self.delta_kernel_norm)
+
+        if self.activation is not None:
+            # Add distribution loss
+            if self.dist_loss is not None:
+                output = self.dist_loss(output)
+            # Compute activation
+            output = self.activation(output)
+        return output
+
 def sign_with_ste(x):
     """
     Compute the signum function in the fwd pass but return STE approximation for grad in bkwd pass
     """
-    out = tf.stop_gradient(K.sign(x))
-    # out = tf.stop_gradient(tf.where(tf.equal(x, tf.constant(0, tf.float32)), tf.ones_like(x), x))
-    def grad(upstream):
-        return tf.where(K.less_equal(K.abs(x), 1), upstream, 0*upstream)
-    return out, grad
+    out = x
+    q = tf.math.sign(x)
+    q += (1.0 - tf.math.abs(q))
+    return out + tf.stop_gradient(-out + q)
 
 def custom_relu_mod_on_inputs(x, num_bits=8):
     """
@@ -261,13 +973,19 @@ def soft_root_sign(x, alpha=1, beta=1):
     
     return out
 
+def sign_with_tanh_deriv(x):
+    out = tf.keras.activations.tanh(x)
+    q = tf.math.sign(x)
+    q += (1.0 - tf.math.abs(q))
+    return out + tf.stop_gradient(-out + q)
+
 def sign_with_htanh_deriv(x):
     out = hard_tanh(x)
     q = tf.math.sign(x)
     q += (1.0 - tf.math.abs(q))
     return out + tf.stop_gradient(-out + q)
 
-def sign_swish(x, beta=5):
+def sign_swish(x, beta=1):
     """
     Adapted from arXiv:1812.11800v3 "Regularized Binary Network Training"
     """
@@ -275,6 +993,15 @@ def sign_swish(x, beta=5):
     temped_sigmoid = tf.sigmoid(beta_x)
     out = 2*temped_sigmoid*(1+beta_x*(1-temped_sigmoid))-1
     return out
+
+def sign_with_ss_deriv(x):
+    """
+    Compute the signum function in the fwd pass but return STE approximation for grad in bkwd pass
+    """
+    out = sign_swish(x, beta=1)
+    q = tf.math.sign(x)
+    q += (1.0 - tf.math.abs(q))
+    return out + tf.stop_gradient(-out + q)
 
 class TrainableSignSwish(tf.Module):
     def __init__(self, a_init=None, name=""):
@@ -291,6 +1018,147 @@ class TrainableSignSwish(tf.Module):
 
     def get_config(self):
         return {'a': float(self.a)}
+
+class GeneralActivation(tf.keras.layers.Layer):
+    """
+    Adapted from ArXiv:1805.06085 "PACT: Parameterized Clipping Activation for Quantized Neural Networks"
+    """
+    def __init__(self, beta_ss=10, regularizer=None, normalizer=None, activation=None, add_dist_loss=True, name=""):
+        super(GeneralActivation, self).__init__()
+        self.regularizer = regularizer
+        self.normalizer = normalizer
+        self.activation = activation
+        self.dist_loss = None 
+        
+        if add_dist_loss:
+            self.dist_loss = DistributionLossLayer() 
+        """
+        self.alpha = self.add_weight(
+            name=name+"/alpha", 
+            shape=[], 
+            dtype=tf.float32, 
+            initializer=tf.keras.initializers.constant(self.alpha_init), 
+            regularizer=self.regularizer,
+            trainable=True,
+        )
+        self.inp_moving_mean = self.add_weight(
+            name=name+"/inp_moving_mean", 
+            shape=[], 
+            dtype=tf.float32, 
+            initializer=tf.keras.initializers.constant(0), 
+            trainable=False,
+        )
+        self.inp_moving_std = self.add_weight(
+            name=name+"/inp_moving_std", 
+            shape=[], 
+            dtype=tf.float32, 
+            initializer=tf.keras.initializers.constant(0), 
+            trainable=False,
+        )
+        self.out_moving_mean = self.add_weight(
+            name=name+"/out_moving_mean", 
+            shape=[], 
+            dtype=tf.float32, 
+            initializer=tf.keras.initializers.constant(0), 
+            trainable=False,
+        )
+        self.out_moving_std = self.add_weight(
+            name=name+"/out_moving_std", 
+            shape=[], 
+            dtype=tf.float32, 
+            initializer=tf.keras.initializers.constant(0), 
+            trainable=False,
+        )
+        """
+        
+        # Get normalizer
+        if self.normalizer == "batch_norm":
+            self.norm = tf.keras.layers.BatchNormalization()
+        elif self.normalizer == "layer_norm":
+            self.norm = tf.keras.layers.LayerNormalization()
+        else:
+            self.norm = None
+
+        # self.beta_ss = self.add_weight(
+        #     name=name+"/beta_ss",
+        #     shape=[],
+        #     dtype=tf.float32,
+        #     initializer=tf.keras.initializers.Constant(beta_ss),
+        #     trainable=False,
+        # )
+
+        self.built = False
+
+
+    def build(self, input_shape):
+        super(GeneralActivation, self).build(input_shape)
+        
+        # Build normalizer
+        if self.norm:
+            self.norm.build(input_shape)
+        
+        new_shape = [128, input_shape[-1]]
+
+        # Build shape dependent stats
+        # self.input_dist = self.add_weight(
+        #     name=self.name+"/inputs_to_act", 
+        #     shape=new_shape, 
+        #     dtype=tf.float32, 
+        #     initializer="zeros", 
+        #     trainable=False,
+        # )
+        # self.output_dist = self.add_weight(
+        #     name=self.name+"/outputs_from_act", 
+        #     shape=new_shape, 
+        #     dtype=tf.float32, 
+        #     initializer="zeros", 
+        #     trainable=False,
+        # )
+
+        self.built = True
+
+    def __call__(self, inputs):
+        input_shape = inputs.get_shape()
+        size_shape = len(input_shape.as_list())
+        if not self.built:
+            self.build(input_shape)
+        
+        # self.beta_ss.assign(self.beta_ss)
+
+        # Calc act
+        # pact = 1/2 * (tf.abs(inputs) - tf.abs(inputs-self.alpha) + self.alpha)
+
+        # Normalize
+        out = inputs
+        if self.norm:
+            out = self.norm(out) # self.layer_norm(inputs)
+
+        # Run activation
+        if self.activation:
+            # Calculate Distribution Loss from ArXiv:1904.02823
+            # if self.dist_loss:
+            #     out = self.dist_loss(out)
+            out = self.activation(out)
+
+        # Compute stats
+        # inputs_for_stats = tf.zeros_like(inputs) + inputs
+        # outputs_for_stats = tf.zeros_like(out) + out
+        # if (size_shape == 3):
+        #     inputs_for_stats = tf.reduce_mean(inputs_for_stats, 1)
+        #     outputs_for_stats = tf.reduce_mean(outputs_for_stats, 1)
+
+        # # Calculate input stats
+        # self.input_dist.assign(0.01 * inputs_for_stats + 0.99 * self.input_dist)
+        
+        # # Calculate output stats
+        # self.output_dist.assign(0.01 * outputs_for_stats + 0.99 * self.output_dist)
+
+        return out
+
+    def get_config(self):
+        return { 
+            "alpha_init": self.alpha_init, 
+        }
 
 @tf.keras.utils.register_keras_serializable(package='Custom', name='rb1')
 class BinaryManhattanRegularizer(tf.keras.regularizers.Regularizer):
@@ -328,7 +1196,6 @@ class TernaryManhattanRegularizer(tf.keras.regularizers.Regularizer):
 
   def get_config(self):
     return {'l2': float(self.l2), 'beta': float(self.beta)}
-
 
 @tf.keras.utils.register_keras_serializable(package='Custom', name='rb2')
 class BinaryEuclideanRegularizer(tf.keras.regularizers.Regularizer):
@@ -406,6 +1273,25 @@ class RectifiedTernaryRegularizer(tf.keras.regularizers.Regularizer):
   def get_config(self):
     return {'l2': float(self.l2), 'alpha': float(self.alpha)}
 
+@tf.keras.utils.register_keras_serializable(package='Custom', name='var_reg')
+class VarianceRegularizer(tf.keras.regularizers.Regularizer):
+  """
+  This is regularizer that punishes weights with variance other than one.
+  """
+  def __init__(self, l2=0.):
+    self.l2 = l2
+
+  def __call__(self, x):
+    out = tf.square(x)
+    out = tf.reduce_sum(out)
+    out = tf.math.divide(1.0, tf.size(x, out_type=tf.float32)) * out
+    out = 1 - out
+    out = tf.square(out)
+    return self.l2 * out
+
+  def get_config(self):
+    return {'l2': float(self.l2)}
+
 # @tf.keras.utils.register_keras_serializable(package='Custom', name='abtr')
 class AdaptiveBinaryTernaryRegularizer(tf.Module):
   """
@@ -427,7 +1313,7 @@ class AdaptiveBinaryTernaryRegularizer(tf.Module):
   def __call__(self, x):
     # tf.print(self.beta)
 
-    x = (x - tf.reduce_mean(x)) / (tf.math.reduce_std(x) + 1e-7)
+    # x = (x - tf.reduce_mean(x)) / (tf.math.reduce_std(x) + 1e-7)
 
     # Three terms in min
     t0 = tf.math.pow(tf.math.abs(tf.math.abs(x) + 1), self.p)
@@ -446,20 +1332,66 @@ class AdaptiveBinaryTernaryRegularizer(tf.Module):
     return out
 
   def get_config(self):
-    return {'lm': float(self.l2), "p": self.p, "gamma": self.gamma}
+    return {'lm': float(self.lm), "p": self.p, "gamma": self.gamma}
 
-class DoubleSymmetricNormalInitializer(tf.keras.initializers.Initializer):
+def no_acc_reg_fn(t, b):
+    b2 = b**2
+    cos_t = tf.cos(t)
+    num = 1 + b2
+    den = 1 + b2*tf.square(cos_t)
+    
+    return -1/2*tf.sqrt(num/den)*cos_t
 
-  def __init__(self, mean, stddev):
-    self.mean = mean
+class NoAccRegularizer(tf.Module):
+  """
+  This regularizer penalizes results of matrix multiplications that lie in bad regions of the domain
+  after a modulo operation is applied.
+
+  Ex. if K (modulus) = 8, then a result of Wx_i mod 8 = 4 mod 8 = -4 instead of +4 which can lead a 
+  sign activation function outputting wrong -1 instead of +1. This is important for binary/ternary
+  networks.
+  """
+  def __init__(self, lm=0., k=8, a=0.75, name=""):
+    super(NoAccRegularizer, self).__init__()
+    self.lm = lm
+    self.k = k
+    self.a = a
+    self.b = a * k
+    self.g_0 = tf.abs(no_acc_reg_fn(2*pi/k * (-k/4 + 1/2), self.b))
+
+  
+  def __call__(self, x):
+    # Map inputs
+    t_x = 2*pi/self.k * (tf.abs(x) - self.k/4 + 1/2)
+
+    # Run function
+    out = no_acc_reg_fn(t_x, self.b) + self.g_0
+
+    return self.lm * tf.reduce_sum(out)
+
+  def get_config(self):
+    return {'lm': float(self.lm), "p": self.p, "gamma": self.gamma}
+
+class TernaryNormalInitializer(tf.keras.initializers.Initializer):
+
+  def __init__(self, stddev=1/60):
     self.stddev = stddev
 
   def __call__(self, shape, dtype=None, **kwargs):
-    return tf.random.normal(
-        shape, mean=self.mean, stddev=self.stddev, dtype=dtype)
+    n0 = tf.random.normal(
+        shape, mean=0, stddev=self.stddev, dtype=dtype)
+    n1 = tf.random.normal(
+        shape, mean=-1, stddev=self.stddev, dtype=dtype)
+    n2 = tf.random.normal(
+        shape, mean=1, stddev=self.stddev, dtype=dtype)
+    pick = tf.random.uniform(shape, minval=0, maxval=3, dtype=tf.int32)
+    out0 = tf.where(tf.equal(pick, 0), n0, tf.zeros(shape))
+    out1 = tf.where(tf.equal(pick, 1), n1, tf.zeros(shape))
+    out2 = tf.where(tf.equal(pick, 2), n2, tf.zeros(shape))
+    return tf.stop_gradient(out0 + out1 + out2)
 
   def get_config(self):  # To support serialization
-    return {"mean": self.mean, "stddev": self.stddev}
+    return {"stddev": self.stddev}
 
 class BreakpointLayerForDebug(tf.keras.layers.Layer):
 
@@ -469,6 +1401,45 @@ class BreakpointLayerForDebug(tf.keras.layers.Layer):
     def call(self, inputs):
         vele = "ferus" # place breakpoint here
         # inputs = tf.where(tf.math.is_nan(inputs), tf.zeros_like(inputs), inputs)
+        return inputs
+
+@tf.function
+def distribution_loss(pre_acts, size_shape, k_d=1, k_s=0.25, k_m=0.25):
+    
+    mean = None
+    std = None
+    if size_shape == 3:
+        mean = tf.math.reduce_mean(pre_acts, [1, 2])
+        std = tf.math.reduce_std(pre_acts, [1, 2])
+    if size_shape == 2:
+        mean = tf.math.reduce_mean(pre_acts, [-1])
+        std = tf.math.reduce_std(pre_acts, [-1])
+    
+    # Calculate absolute value of mean
+    mean_abs = tf.math.abs(mean)
+
+    l_d = tf.math.square(tf.keras.activations.relu(mean_abs - k_d*std))
+    l_s = tf.math.square(tf.keras.activations.relu(k_s*std - 1))
+    l_m = tf.math.square(tf.keras.activations.relu(1 - mean_abs - k_m*std))
+
+    loss = l_d + l_s + 0*l_m # CHANGE BACK
+
+    return loss
+
+
+class DistributionLossLayer(tf.keras.layers.Layer):
+    """
+    Adapted from ArXiv:1904.02823 "Regularizing Activation Distribution for Training Binarized Deep Networks"
+    """
+    def __init__(self, rate=0, k_d=0, k_s=0.01, k_m=0): # k_d=1, k_s=0.25, k_m=0.25 are default
+        super(DistributionLossLayer, self).__init__()
+        self.rate = rate
+        self.k_d = k_d
+        self.k_s = k_s
+        self.k_m = k_m
+
+    def call(self, inputs):
+        self.add_loss(self.rate * tf.reduce_sum(distribution_loss(inputs, len(inputs.get_shape()), self.k_d, self.k_s, self.k_m)))
         return inputs
 
 
@@ -716,7 +1687,7 @@ class TimeReduction(tf.keras.layers.Layer):
         })
         return config
 
-def QSelfAttentionMechanismFn(num_hops, hidden_size, inputs, kernel_regularizer, bias_regularizer, kernel_quantizer, bias_quantizer, kernel_initializer, bias_initializer, activation, name):
+def QSelfAttentionMechanismFn(num_hops, hidden_size, inputs, kernel_regularizer, bias_regularizer, kernel_quantizer, bias_quantizer, kernel_initializer, bias_initializer, activation, use_bias, norm, fold_batch_norm, add_dist_loss, soft_thresh_tern, name):
 
     shp = K.int_shape(inputs)
     T = shp[1]
@@ -725,24 +1696,34 @@ def QSelfAttentionMechanismFn(num_hops, hidden_size, inputs, kernel_regularizer,
     n_k = num_hops
 
     #matmul1
-    sa_matmul1 = QDense(
-        n_c, activation=activation, use_bias=False, 
-        kernel_regularizer=AdaptiveBinaryTernaryRegularizer(lm=1e-1, name=name+"_QDENSE_0"),
+    sa_matmul1 = QDenseWithNorm(
+        n_c, activation=GeneralActivation(activation=activation, name=name+"_QDENSE_0"), 
+        use_bias=use_bias, 
+        kernel_regularizer=kernel_regularizer, # if kernel_regularizer else AdaptiveBinaryTernaryRegularizer(lm=1e-1, name=name+"_QDENSE_0"),
         bias_regularizer=bias_regularizer,
-        kernel_quantizer=kernel_quantizer,
+        kernel_quantizer=kernel_quantizer, # ternary(alpha=1, threshold=0.01), # LearnedThresholdTernary(scale=1.0, threshold=0.005, name=name+"_QDENSE_0"), 0.0032
         bias_quantizer=bias_quantizer,
-        name=name+"_QDENSE_0"
-        )(inputs)
+        kernel_initializer=kernel_initializer,
+        norm=norm,
+        fold_batch_norm=fold_batch_norm,
+        add_dist_loss=add_dist_loss, # add_dist_loss, CHANGE BACK
+        soft_thresh_tern=soft_thresh_tern,
+        name=name+"_QDENSE_0")(inputs)
 
     # matmul2
-    sa_matmul2 = QDense(
-        n_k, activation=activation, use_bias=False, 
-        kernel_regularizer=AdaptiveBinaryTernaryRegularizer(lm=1e-1, name=name+"_QDENSE_1"),
+    sa_matmul2 = QDenseWithNorm(
+        n_k, activation=GeneralActivation(activation=activation, name=name+"_QDENSE_1"),  
+        use_bias=use_bias, 
+        kernel_regularizer=kernel_regularizer, # if kernel_regularizer else AdaptiveBinaryTernaryRegularizer(lm=1e-1, name=name+"_QDENSE_1"),
         bias_regularizer=bias_regularizer,
-        kernel_quantizer=kernel_quantizer,
+        kernel_quantizer=kernel_quantizer, # ternary(alpha=1, threshold=0.01), # LearnedThresholdTernary(scale=1.0, threshold=0.003, name=name+"_QDENSE_1"), 0.00055
         bias_quantizer=bias_quantizer,
-        name=name+"_QDENSE_1"
-        )(sa_matmul1)
+        kernel_initializer=kernel_initializer,
+        norm=norm,
+        fold_batch_norm=fold_batch_norm,
+        add_dist_loss=add_dist_loss, # add_dist_loss, CHANGE BACK
+        soft_thresh_tern=soft_thresh_tern,
+        name=name+"_QDENSE_1")(sa_matmul1)
 
     # transpose
     sa_trans = tf.keras.layers.Lambda(

@@ -12,11 +12,13 @@ tf.config.optimizer.set_jit(True)
 
 import tensorflow_addons as tfa
 import tensorflow_model_optimization as tfmot
+import qkeras.callbacks as qcallbacks
 import numpy as np
 import matplotlib.pyplot as plt
 import sklearn.metrics
 from pycm import *
 from datetime import datetime
+import larq
 
 # DATA
 import data
@@ -32,7 +34,8 @@ from config import *
 # GENERAL UTILS
 from utils.general import *
 
-RUN_DIR = RUNS_DIR + datetime.now().strftime("%Y%m%d-%H%M%S") + "/"
+now = datetime.now()
+RUN_DIR = RUNS_DIR + now.strftime("%Y%m") + "/" + now.strftime("%Y%m%d-%H%M%S") + "/"
 
 # Init random seed for experimental reproducibility
 tf.random.set_seed(HP_SEED.domain.values[0])
@@ -119,6 +122,7 @@ def setup_hparams(log_dir, hparam_dir):
             HP_NUM_SELF_ATT_UNITS,
             HP_NUM_SELF_ATT_HOPS,
             HP_NUM_DENSE_UNITS,
+            HP_SEED,
             HP_BATCH_SIZE,
             HP_LR,
             HP_NUM_EPOCHS,
@@ -154,6 +158,7 @@ def setup_hparams(log_dir, hparam_dir):
             HP_NUM_DENSE_UNITS: HP_NUM_DENSE_UNITS.domain.values[0],
 
             # Training
+            HP_SEED: HP_SEED.domain.values[0],
             HP_BATCH_SIZE: HP_BATCH_SIZE.domain.values[0],
             HP_LR: HP_LR.domain.values[0],
             HP_NUM_EPOCHS: HP_NUM_EPOCHS.domain.values[0]
@@ -791,7 +796,8 @@ def post_quant_test(_):
     # checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20221011-222803/checkpoints/" # ternary input, ternary recurrent kernel (thresh=0.33)
     # checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20221012-153610/checkpoints/" # reg input, htanh activation (72%)
     # checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20221019-170728/checkpoints/" # reg input, relu, SQ^2 w/ std (74% val)
-    checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20221020-123140/checkpoints/" # ter input, relu, SQ^2 w/ std (70% val)
+    # checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20221020-123140/checkpoints/" # ter input, relu, SQ^2 w/ std (70% val)
+    checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221122-161635/checkpoints/"
 
     # Do we run eagerly for debugging? By default, we don't. Set "True" for here on.
     # tf.config.run_functions_eagerly(True)
@@ -930,9 +936,9 @@ def post_quant_test(_):
         optimizer=tf.keras.optimizers.Adam(learning_rate=AttentionLRScheduler(2000, hparams[HP_NUM_LSTM_UNITS.name])),
         loss={
             "DENSE_OUT": tf.keras.losses.CategoricalCrossentropy(from_logits=True, reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE),
-            "DENSE_0": CenterLoss(ratio=1, num_classes=(num_classes-1), num_features=penultimate_layer_units,from_logits=True, reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE)
+            # "DENSE_0": CenterLoss(ratio=1, num_classes=(num_classes-1), num_features=penultimate_layer_units,from_logits=True, reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE)
         },
-        loss_weights={"DENSE_OUT": 1, "DENSE_0": 0.0001},
+        # loss_weights={"DENSE_OUT": 1, "DENSE_0": 0.0001},
         metrics={"DENSE_OUT": [tf.keras.metrics.CategoricalAccuracy(), tf.keras.metrics.TopKCategoricalAccuracy(k=5)]},
     )
 
@@ -947,7 +953,7 @@ def post_quant_test(_):
         model, 
         optimizer=tf.keras.optimizers.Adam(learning_rate=lr), 
         loss_fn=tf.keras.losses.categorical_crossentropy, 
-        eval_dataset=eval_dataset.take(50), 
+        eval_dataset=eval_dataset.take(100), 
         batch_size=batch_size, 
         strategy=strategy,
         hparams=hparams,
@@ -999,15 +1005,62 @@ def qkeras_qat(_):
 
     # Initalize weights to a run for multi step training
     pretrained_weights = None
-    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20221006-140455/checkpoints/" 
-    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20220929-175346/checkpoints/" # Original small param run
-    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20220930-161228/checkpoints/" # Original small param run, ternary input
-    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20221006-170430/checkpoints/" # 86% run, no quant, larger params
-    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20221011-222803/checkpoints/" # ternary input, ternary recurrent kernel (thresh=0.33)
-    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20221012-153610/checkpoints/" # reg input, htanh act, 82% full eval
-    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20221013-223840/checkpoints/" # reg input, htanh act, RT2v2+RB2, 86% full eval
-    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20221019-170728/checkpoints/" # reg input, relu, SQ^2 w/ std, 86% full eval
-    pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20221020-123140/checkpoints/" # ter input, relu, SQ^2 w/ std (70% val)
+
+    # WITH STACKED RNN 
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202209/20220929-175346/checkpoints/" # Original small param run
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202209/20220930-161228/checkpoints/" # Original small param run, ternary input
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202210/20221006-170430/checkpoints/" # 86% run, no quant, larger params
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202210/20221011-222803/checkpoints/" # ternary input, ternary recurrent kernel (thresh=0.33)
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202210/20221012-153610/checkpoints/" # reg input, htanh act, 82% full eval
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202210/20221013-223840/checkpoints/" # reg input, htanh act, RT2v2+RB2, 86% full eval
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202210/20221019-170728/checkpoints/" # reg input, relu, SQ^2 w/ std, 86% full eval
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202210/20221020-123140/checkpoints/" # ter input, relu, SQ^2 w/ std (70% val)
+    
+    # WITH JUST RNN
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202210/20221027-192721/checkpoints/" # Original
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202210/20221028-132315/checkpoints/" # Original w/ bn(rnn) 92% full eval
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202210/20221028-142648/checkpoints/" # ter input w/ bn(rnn)
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202210/20221028-122902/checkpoints/" # ter input
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202210/20221026-122933/checkpoints/" # Original w/ WN
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202210/20221026-152451/checkpoints/" # ter input w/ WN
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202210/20221031-153929/checkpoints/" # Original w/ bn(rnn), sign_htan act, 50%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202210/20221031-200447/checkpoints/" # Original w/ bn(all), SS(1), 74%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221103-234509/checkpoints/" # Original w/ SS(1), 77%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221118-161835/checkpoints/" # Original x/ sign_with_ss(1), 61%, clipnorm=1
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221118-231640/checkpoints/" # Original x/ sign_with_ss(1), 61%, clipnorm=1, ter_quant with +-x and 0*x
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221108-203218/checkpoints/" # ter input w/ SS(1), 74%, clipnorm=1
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221101-020512/checkpoints/" # Original  w/ bn(all), SS(3), 76%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221101-121631/checkpoints/" # Original  w/ bn(all), SS(5), 76%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221101-220703/checkpoints/" # Original  w/ bn(all), SS(8), 77%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221102-010642/checkpoints/" # Original w/ bn(all) after q, sign, tern_w_thresh weights, 46%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221104-111021/checkpoints/" # Original w/ SS(3), dist_loss, so far 38%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221104-130010/checkpoints/" # ter input w/ bn(all) after q, quant(all), SS(1), 51%, clipnorm=1
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221114-154622/checkpoints/" # ter input w/ bn(all) after q, quant(all), SS(1), 58%, clipnorm=1, 0.08 for rec + ker, 0.7*mean(abs) for rest
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221114-175306/checkpoints/" # ter input w/ bn(all) after q, quant(all), SS(1), 60%, clipnorm=1, 0.08 for rec + ker, 0.7*mean(abs) for rest, recorded deltas(norm)
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221114-181024/checkpoints/" # ter input w/ bn(all) after q, quant(all), sign with htan, 40%, clipnorm=1, 0.08 for rec + ker, 0.7*mean(abs) for rest, recorded deltas(norm)
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221114-230002/checkpoints/" # ter input w/ bn(all) after q, quant(all), sign with htan, 44%, clipnorm=1, 0.08 for rec + ker, 0.7*mean(abs) for rest, recorded deltas(norm)
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221113-142911/checkpoints/" # Original w/ ReLU, VarReg(2), 50%, clipnorm=1
+
+    # LARGER NETWORKS
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221117-163745/checkpoints/" # Original (x4) w/ SS(1), clipnorm=0.1, 33%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221118-115744/checkpoints/" # ter input (x4) w/ SS(1), stochastic_ternary(t=0.25) quant, 2% so far but training
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221120-134420/checkpoints/" # Original (all x3 except dense, hops) w/ tanh, ATSCH(5400, HP_NUM_SELF_ATT_UNITS)), default rnn init, 75%
+    pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221125-184845/checkpoints/" # Original (all x3 except dense, hops) w/ tanh, lr=1e-4, dist_loss(10, kd=1, all else 0), default rnn init, 77%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221125-020548/checkpoints/" # Original (all x3 except dense, hops) w/ sign_with_tanh, lr=1e-4, clipnorm=1, dist_loss(10, kd=1, all else 0), 20221120-134420 init, 70%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221121-152133/checkpoints/" # Original (all x3 except dense, hops) w/ sign_with_htan, ATSCH(5400, HP_NUM_SELF_ATT_UNITS)), 20221120-134420 init, 65%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221126-153524/checkpoints/" # # Original (all x3 except dense, hops) w/ sign_with_tanh, lr=1e-4, dist_loss(10, kd=1, all else 0), 20221125-184845 init, 67%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221125-112620/checkpoints/" # tern input (all x3 except dense, hops) w/ sign_with_tanh, lr=1e-4, dist_loss(10, kd=1, all else 0), 20221125-020548 init, 63%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221121-194336/checkpoints/" # tern input (all x3 except dense, hops) w/ sign_with_htan, ATSCH(5400, HP_NUM_SELF_ATT_UNITS)), 20221121-152133 init, 59%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221128-205042/checkpoints/" # tern input (all x3 except dense, hops) w/ sign_with_tanh, lr=1e-4, dist_loss(10, kd=1, all else 0), 20221126-153524 init, 60%
+
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202212/20221202-124105/checkpoints/" # Original (all x3 except dense) w/ tanh, center_loss, lr=1e-4, dist_loss(0.01, kd=0, ks=0.01, kg=0), default rnn init, 63%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202212/20221202-130412/checkpoints/" # Original (all x3 except dense) w/ sign_with_tanh, lr=1e-5, dist_loss(0.01, kd=0, ks=0.01, kg=0), 20221202-124105 init, 62%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202212/20221202-145741/checkpoints/" # tern input (all x3 except dense) w/ sign_with_tanh, ATSCH(1000, 100000), dist_loss(0.01, kd=0, ks=0.01, kg=0), 20221202-130412 init, 61%
+
+    # NETWORKS FOR SOFT THRESHOLD TERNARIZATION
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202212/20221203-213104/checkpoints/" # Original (// Ws (W1+W2)) w/ tanh, lr=1e-4, dist_loss(0.01, kd=0, ks=0.01, kg=0), default rnn init, 65%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202212/20221207-162220/checkpoints/" # Original (// Ws (W1-W2)) w/ tanh, lr=1e-4, dist_loss(0.01, kd=0, ks=0.01, kg=0), default rnn init, 60% but can still go
+
 
     # Init the environment
     strategy, dtype, num_workers = configure_environment(
@@ -1047,38 +1100,70 @@ def qkeras_qat(_):
         if checkpoint_dir is not None:
             model.load_weights(checkpoint_dir)
             logging.info('Restored checkpoint weights from {}.'.format(checkpoint_dir))
-
-        # reinit betas for SQ
-        # model_weights = model.get_weights()
-        # for i in range(len(model_weights)):
-        #     if "beta" in model.weights[i].name:
-        #         model_weights[i] = pi/2-1e-7
-        # model.set_weights(model_weights)
+            
+        weights = model.get_weights()
+        for i in range(len(weights)):
+            if "kernel" in model.weights[i].name:
+                weights[i] = (weights[i] - tf.reduce_mean(weights[i]))/tf.math.reduce_std(weights[i])
+        model.set_weights(weights)
 
         save_hparams(hparams, run_dir+TB_LOGS_DIR)
 
         model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=AttentionLRScheduler(2000, hparams[HP_NUM_LSTM_UNITS.name])),
-            # optimizer=tf.keras.optimizers.Adam(learning_rate=0.00001),
+            # optimizer=larq.optimizers.Bop(threshold=1e-3, gamma=1e-2), # first ever binary optimizer (flips weights based on grads)
+            # optimizer=tf.keras.optimizers.Adam(learning_rate=AttentionLRScheduler(2000, 768)),
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4,), # 1e-5 worked for quant with clipnorm=1
             loss={
-                "DENSE_OUT": tf.keras.losses.CategoricalCrossentropy(from_logits=True, reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE),
-                "DENSE_0": CenterLoss(ratio=1, num_classes=(num_classes-1), num_features=penultimate_layer_units, from_logits=True, reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE)
+                "DENSE_OUT": tf.keras.losses.CategoricalCrossentropy(from_logits=False, reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE),
+                # "DENSE_0": CenterLoss(ratio=1, num_classes=(num_classes-1), num_features=penultimate_layer_units, from_logits=True, reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE)
             },
-            loss_weights={"DENSE_OUT": 1, "DENSE_0": 0.0001},
+            # loss_weights={"DENSE_OUT": 1, "DENSE_0": 0.0001},
             metrics={"DENSE_OUT": [tf.keras.metrics.CategoricalAccuracy(), tf.keras.metrics.TopKCategoricalAccuracy(k=5)]},
         )
 
     # model.run_eagerly = True
 
+    class ExtendedTensorBoard(tf.keras.callbacks.TensorBoard):
+        def _log_gradients(self, epoch):
+            step = tf.cast(epoch, dtype=tf.int64)
+            writer = self._train_writer
+            # writer = self._get_writer(self._train_run_name)
+            
+            # here we use test data to calculate the gradients
+            features, y_true = list(ds_val.take(1))[0]
+            with tf.GradientTape(persistent=True, watch_accessed_variables=True) as tape:
+                tape.watch(self.model.trainable_weights)
+                y_pred = self.model(features)  # forward-propagation
+                loss = self.model.loss["DENSE_OUT"](y_true=y_true, y_pred=y_pred[0])  # calculate loss
+                gradients = tape.gradient(loss, self.model.trainable_weights)  # back-propagation
+
+            with writer.as_default():
+                # In eager mode, grads does not have name, so we get names from model.trainable_weights
+                for weights, grads in zip(self.model.trainable_weights, gradients):
+                    mean = tf.reduce_mean(tf.abs(grads))
+                    tf.summary.scalar('grad_mean_{}'.format(weights.name), mean)
+                    tf.summary.histogram(
+                        weights.name.replace(':', '_')+'_grads', data=grads, step=step)
+            writer.flush()
+
+        # def on_epoch_end(self, epoch, logs=None):  
+        def on_train_batch_end(self, batch, logs={}):  
+            # This function overwrites the on_epoch_end in tf.keras.callbacks.TensorBoard
+            # but we do need to run the original on_epoch_end, so here we use the super function. 
+            # super(ExtendedTensorBoard, self).on_epoch_end(epoch, logs=logs)
+            super(ExtendedTensorBoard, self).on_train_batch_end(batch, logs=logs)
+            if self.histogram_freq and batch % self.histogram_freq == 0:
+                self._log_gradients(batch)
+
     # Define callbacks
     tb_callback = tf.keras.callbacks.TensorBoard(
-        log_dir=(run_dir + TB_LOGS_DIR), histogram_freq=1, # profile_batch='100,200'
+        log_dir=(run_dir + TB_LOGS_DIR), histogram_freq=1, update_freq="epoch", # profile_batch='100,200'
     )
 
     if RECORD_CKPTS:
         ckpt_callback = tf.keras.callbacks.ModelCheckpoint(filepath=(run_dir + CKPT_DIR),
                                                     save_weights_only=True,
-                                                    save_best_only=False,
+                                                    save_best_only=True,
                                                     monitor="val_DENSE_OUT_categorical_accuracy",
                                                     mode="max",
                                                     verbose=1)
@@ -1094,6 +1179,9 @@ def qkeras_qat(_):
 
     # reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.2,
     #                           patience=4, min_lr=0.0001)
+
+    # QKeras Noise Callback
+    # qnoise_callback = qcallbacks.QNoiseScheduler(1, 200, freq_type="epoch", use_ste=True, log_dir=(run_dir + TB_LOGS_DIR))
 
     # Train
     num_epochs = hparams[HP_NUM_EPOCHS.name]

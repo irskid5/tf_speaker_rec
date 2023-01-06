@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+os.environ["TF_GPU_THREAD_MODE"] = "gpu_private"
 
 import io
 import tensorflow as tf
@@ -81,37 +82,42 @@ strategy, _, num_workers = configure_environment(gpu_names=None, fp16_run=False,
 
 # IMPORT DATASET
 
-path_to_file = tf.keras.utils.get_file('shakespeare.txt', 'https://storage.googleapis.com/download.tensorflow.org/data/shakespeare.txt')
+from data.creators import text8_creator
 
-# Read, then decode for py2 compat.
-text = open(path_to_file, 'rb').read().decode(encoding='utf-8')
-# length of text is the number of characters in it
-print(f'Length of text: {len(text)} characters')
+ds_train, ds_val, ds_test, ids_from_chars, chars_from_ids = text8_creator.text8_creator()
+num_features = len(ids_from_chars.get_vocabulary())
 
-# Take a look at the first 250 characters in text
-print(text[:250])
+def split_input_target_and_one_hot(sequence):
+    one_hot_sequence = tf.keras.layers.CategoryEncoding(num_tokens=num_features, output_mode="one_hot")(sequence)
+    input_text = one_hot_sequence[:-1]
+    target_text = one_hot_sequence[1:]
+    return input_text, target_text
 
-# The unique characters in the file
-vocab = sorted(set(text))
-print(f'{len(vocab)} unique characters')
-
-
+SEQ_LEN = 50
 AUTOTUNE = tf.data.experimental.AUTOTUNE
-BATCH_SIZE = 64*num_workers
+BATCH_SIZE = 128*num_workers
 
 # Setup for train dataset
-ds_train = ds_train.map(normalize_img, num_parallel_calls=AUTOTUNE)
+ds_train = ds_train.batch(SEQ_LEN+1, drop_remainder=True)
+ds_train = ds_train.map(split_input_target_and_one_hot, num_parallel_calls=AUTOTUNE)
 ds_train = ds_train.cache()
-ds_train = ds_train.shuffle(ds_info.splits["train"].num_examples)
-ds_train = ds_train.map(augment)
-ds_train = ds_train.batch(BATCH_SIZE)
+ds_train = ds_train.shuffle(buffer_size=1000000)
+ds_train = ds_train.batch(BATCH_SIZE, drop_remainder=True)
 ds_train = ds_train.prefetch(AUTOTUNE)
 
+# Setup for validation dataset
+ds_val = ds_val.batch(SEQ_LEN+1, drop_remainder=True)
+ds_val = ds_val.map(split_input_target_and_one_hot, num_parallel_calls=AUTOTUNE)
+ds_val = ds_val.cache()
+ds_val = ds_val.batch(BATCH_SIZE, drop_remainder=True)
+ds_val = ds_val.prefetch(AUTOTUNE)
+
 # Setup for test Dataset
-ds_test = ds_train.map(normalize_img, num_parallel_calls=AUTOTUNE)
+ds_test = ds_test.batch(SEQ_LEN+1, drop_remainder=True)
+ds_test = ds_test.map(split_input_target_and_one_hot, num_parallel_calls=AUTOTUNE)
 ds_test = ds_test.cache()
-ds_test = ds_train.batch(BATCH_SIZE)
-ds_test = ds_train.prefetch(AUTOTUNE)
+ds_test = ds_test.batch(BATCH_SIZE, drop_remainder=True)
+ds_test = ds_test.prefetch(AUTOTUNE)
 
 # Regularizers (None for quantization I believe)
 kernel_regularizer = None # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001)
@@ -120,50 +126,43 @@ bias_regularizer = None
 activation_regularizer = None # tf.keras.regularizers.L2(l2=0.0001)
 
 # Quantization functions (General)
-kernel_quantizer = ternary(alpha=1, threshold=0.05) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.01) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.7*tf.reduce_mean(tf.abs(x))) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
-recurrent_quantizer = ternary(alpha=1, threshold=0.05) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.02) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.08) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
+kernel_quantizer = None # ternary(alpha=1, threshold=0.05) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.01) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.7*tf.reduce_mean(tf.abs(x))) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
+recurrent_quantizer = None # ternary(alpha=1, threshold=0.05) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.02) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.08) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
 bias_quantizer = None # ternary(alpha=1) # quantized_bits(bits=8, integer=8, symmetric=1, keep_negative=True)
 
 # Optional
 soft_thresh_tern = False
 learned_thresh = False
-tern = True
-add_no_acc_reg = True
+tern = False
+add_no_acc_reg = False
 add_dist_loss = False
 acc_precision = 6
 
 # Activation functions
-# activation_irnn = tf.keras.activations.tanh
-# activation_dense = tf.keras.activations.tanh
+activation_irnn = tf.keras.activations.relu
+activation_dense = tf.keras.activations.relu
 
 # Activation fns (quantized)
 # activation_irnn = sign_with_tanh_deriv
 # activation_dense = sign_with_tanh_deriv
 
 # Activation fns (quantized with mod)
-activation_irnn = lambda x: custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=acc_precision)
-activation_dense = lambda x: custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=acc_precision)
+# activation_irnn = lambda x: custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=acc_precision)
+# activation_dense = lambda x: custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=acc_precision)
 
 # Initializers
 rnn_kernel_initializer = tf.keras.initializers.VarianceScaling(scale=0.5 if soft_thresh_tern else 1.0, mode="fan_avg", distribution="uniform", seed=SEED) # "he_normal" is default 
-rnn_recurrent_initializer = tf.keras.initializers.Orthogonal(gain=0.5 if soft_thresh_tern else 1.0, seed=SEED) # keep as None
-dense_kernel_initializer = tf.keras.initializers.VarianceScaling(scale=1.0 if soft_thresh_tern else 2.0, mode="fan_in", distribution="truncated_normal", seed=SEED) # "he_normal" is default 
+rnn_recurrent_initializer = tf.keras.initializers.Identity()
+dense_kernel_initializer = tf.keras.initializers.VarianceScaling(scale=0.5 if soft_thresh_tern else 1.0, mode="fan_avg", distribution="uniform", seed=SEED) # "he_normal" is default 
 
 
 def get_model():
     model = tf.keras.Sequential(
         [
-            tf.keras.layers.Input((28, 28, 1)),
-            tf.keras.layers.Lambda(
-                lambda x: tf.stop_gradient(ternarize_tensor_with_threshold(x, theta=0.7*tf.reduce_mean(tf.abs(x)))),
-                trainable=False,
-                dtype=tf.float32,
-                name="TERNARIZE_WITH_THRESHOLD"
-            ) if tern else tf.keras.layers.Lambda(lambda x: x, name="NOOP"),
-            tf.keras.layers.Reshape(target_shape=(28, 28)),
+            tf.keras.layers.Input((SEQ_LEN,num_features)),
             QIRNN(
                 cell=None,
-                units=128, 
+                units=2048, 
                 activation=activation_irnn, 
                 use_bias=False, 
                 return_sequences=True, 
@@ -177,45 +176,43 @@ def get_model():
                 add_no_acc_reg=add_no_acc_reg,
                 no_acc_reg_lm=0.001,
                 no_acc_reg_bits=acc_precision,
-                s=10,
-                name="QRNN_0"),
-            TimeReduction(reduction_factor=2),
-            QIRNN(
-                cell=None,
-                units=128,  
-                activation=activation_irnn, 
-                use_bias=False, 
-                return_sequences=True, 
-                kernel_regularizer=kernel_regularizer, 
-                recurrent_regularizer=recurrent_regularizer,
-                kernel_quantizer=LearnedThresholdTernary(scale=1.0, threshold=0.045, name="QRNN_1/quantized_kernel") if learned_thresh else kernel_quantizer,
-                recurrent_quantizer=LearnedThresholdTernary(scale=1.0, threshold=0.06, name="QRNN_1/quantized_recurrent") if learned_thresh else recurrent_quantizer,
-                kernel_initializer=rnn_kernel_initializer,
-                recurrent_initializer=rnn_recurrent_initializer,
-                add_dist_loss=add_dist_loss,
-                add_no_acc_reg=add_no_acc_reg,
-                no_acc_reg_lm=0.001,
-                no_acc_reg_bits=acc_precision,
-                s=10,
-                name="QRNN_1"),
-            tf.keras.layers.Flatten(),
-            QDenseWithNorm(
-                1024, 
-                activation=activation_dense, 
-                use_bias=False,
-                kernel_regularizer=kernel_regularizer, 
-                kernel_quantizer=LearnedThresholdTernary(scale=1.0, name="DENSE_0/quantized_kernel") if learned_thresh else kernel_quantizer,
-                kernel_initializer=dense_kernel_initializer,
-                add_dist_loss=add_dist_loss,
-                add_no_acc_reg=add_no_acc_reg,
-                no_acc_reg_lm=0.005,
-                no_acc_reg_bits=acc_precision,
                 s=1,
-                name="DENSE_0",),
+                name="QRNN_0"),
+            # QIRNN(
+            #     cell=None,
+            #     units=256,  
+            #     activation=activation_irnn, 
+            #     use_bias=False, 
+            #     return_sequences=True, 
+            #     kernel_regularizer=kernel_regularizer, 
+            #     recurrent_regularizer=recurrent_regularizer,
+            #     kernel_quantizer=LearnedThresholdTernary(scale=1.0, threshold=0.045, name="QRNN_1/quantized_kernel") if learned_thresh else kernel_quantizer,
+            #     recurrent_quantizer=LearnedThresholdTernary(scale=1.0, threshold=0.06, name="QRNN_1/quantized_recurrent") if learned_thresh else recurrent_quantizer,
+            #     kernel_initializer=rnn_kernel_initializer,
+            #     recurrent_initializer=rnn_recurrent_initializer,
+            #     add_dist_loss=add_dist_loss,
+            #     add_no_acc_reg=add_no_acc_reg,
+            #     no_acc_reg_lm=0.001,
+            #     no_acc_reg_bits=acc_precision,
+            #     s=1,
+            #     name="QRNN_1"),
+            # QDenseWithNorm(
+            #     1024, 
+            #     activation=activation_dense, 
+            #     use_bias=False,
+            #     kernel_regularizer=kernel_regularizer, 
+            #     kernel_quantizer=LearnedThresholdTernary(scale=1.0, name="DENSE_0/quantized_kernel") if learned_thresh else kernel_quantizer,
+            #     kernel_initializer=dense_kernel_initializer,
+            #     add_dist_loss=add_dist_loss,
+            #     add_no_acc_reg=add_no_acc_reg,
+            #     no_acc_reg_lm=0.005,
+            #     no_acc_reg_bits=acc_precision,
+            #     s=1,
+            #     name="DENSE_0",),
             QDenseWithNorm(
-                10, 
+                num_features, 
                 use_bias=False,
-                activation=None, 
+                activation=tf.keras.activations.softmax, 
                 kernel_regularizer=kernel_regularizer, 
                 kernel_quantizer=LearnedThresholdTernary(scale=1.0, name="DENSE_OUT/quantized_kernel") if learned_thresh else kernel_quantizer,
                 kernel_initializer=dense_kernel_initializer, 
@@ -223,7 +220,8 @@ def get_model():
                 add_no_acc_reg=False,
                 s=1,
                 name="DENSE_OUT",),
-        ]
+        ],
+        name="TEXT8_BASIC_RNN"
     )
 
     model.summary()
@@ -238,25 +236,7 @@ if checkpoint_dir:
 # Specify location of pretrained weights
 pretrained_weights = None
 
-# pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221208-134607/checkpoints/" # Original, tanh, default init, Adam(1e-4), L2(1e-4), 99%
-# pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221208-140942/checkpoints/" # Original, sign_with_tanh, 20221208-134607 init, Adam(1e-5, clipnorm=1), 98%
-# pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221208-150638/checkpoints/" # tern input, sign_with_tanh, 20221208-140942 init, Adam(1e-5, clipnorm=1), 99%
-# pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221208-154453/checkpoints/" # tern input, sign_with_tanh, 20221208-150638 init, tern(0.1) for all, NoAccRegV2(lm=0,k=8) -> QRNN_0:0.63,QRNN_1:0.54,DENSE_0:0.59, Adam(1e-5, clipnorm=1), 93%
-# pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221221-232808/checkpoints/" # tern input, sign_with_tanh, 20221208-154453 init, tern(0.1) for all, NoAccRegV2(lm=5e-4,k=8) -> QRNN_0:1.0,QRNN_1:0.89,DENSE_0:0.79, Adam(CosineDecay(1e-4, 500, alpha=0.1), clipnorm=1), 85%
-# pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221221-232819/checkpoints/" # tern input, sign_with_tanh, 20221208-154453 init, tern(0.1) for all, NoAccRegV2(lm=1e-3,k=8) -> QRNN_0:1.0,QRNN_1:0.95,DENSE_0:0.87, Adam(CosineDecay(1e-4, 500, alpha=0.1), clipnorm=1), 73%
-# pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221221-193404/checkpoints/" # tern input, sign_with_tanh, 20221208-154453 init, tern(0.1) for all, NoAccRegV2(lm=1e-4,k=8) -> QRNN_0:0.99,QRNN_1:0.64,DENSE_0:0.64, Adam(CosineDecay(1e-4, 500, alpha=0.1), clipnorm=1), 92%
-
-# pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221216-184318/checkpoints/" # Original, sign_with_tanh, 20221208-134607 init, NoAccRegV2(lm=5e-6,k=4) -> QRNN_0:1.0,QRNN_1:0.99,DENSE_0:0.95, Adam(CosineDecay(1e-4, 100, alpha=0.1), clipnorm=1), 98%
-# pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221220-123439/checkpoints/" # tern input, sign_with_tanh, 20221216-184318 init, NoAccRegV2(lm=5e-6,k=4) -> QRNN_0:1.0,QRNN_1:0.99,DENSE_0:0.95, Adam(CosineDecay(1e-4, 100, alpha=0.1), clipnorm=1), 98%
-
-pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221222-193832/checkpoints/" # og
-pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221222-195050/checkpoints/" # og + sign
-pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221222-202422/checkpoints/" # og + sign + tern
-pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221223-150643/checkpoints/" # og + sign + tern + quant, 92%
-
-# pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221229-123124/checkpoints/" # og + sign + tern + quant + NoAccReg1(0.001 all, 0.005 Dense0), 20221223-150643 init, 71%
-# pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221229-144111/checkpoints/" # og + sign + tern + quant + NoAccReg2(0.001 all, 0.005 Dense0), 20221223-150643 init, 82%
-# pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221229-182840/checkpoints/" # og + sign + tern + (quant + NoAccReg2(0.001 all, 0.005 Dense0)), 20221222-202422 init, 84.48%
+# pretrained_weights = "/home/vele/Documents/masters/text8_rnn/runs/202301/20230106-143250/checkpoints/"
 
 with strategy.scope():
     model = get_model()
@@ -279,8 +259,9 @@ with strategy.scope():
 
     model.compile(
         # optimizer=larq.optimizers.Bop(threshold=1e-8, gamma=1e-4), # first ever binary optimizer (flips weights based on grads)
-        optimizer=tf.keras.optimizers.Adam(clipnorm=1),
-        loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+        optimizer=tf.keras.optimizers.Adam(),
+        loss={"DENSE_OUT": tf.keras.losses.CategoricalCrossentropy(from_logits=False)},
+        loss_weights={"DENSE_OUT": np.log2(np.e)},
         metrics=["accuracy"],
     )
 
@@ -288,7 +269,7 @@ with strategy.scope():
 
 # Define callbacks
 tb_callback = tf.keras.callbacks.TensorBoard(
-    log_dir=(RUN_DIR + TB_LOGS_DIR), histogram_freq=1, update_freq="epoch", # profile_batch='100,200'
+    log_dir=(RUN_DIR + TB_LOGS_DIR), histogram_freq=1, update_freq="epoch", # profile_batch='1000,1200'
 )
 
 # Add a lr decay callback
@@ -315,7 +296,7 @@ if train:
         model.fit(
             ds_train,
             epochs=1000,
-            validation_data=ds_test,
+            validation_data=ds_val,
             callbacks=[tb_callback, ckpt_callback, lr_callback],
             verbose=1,
         )

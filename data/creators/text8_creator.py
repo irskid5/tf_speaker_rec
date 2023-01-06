@@ -45,20 +45,21 @@ def text8_creator():
     # Now create the tf.keras.layers.StringLookup layer
     # It converts from tokens to character IDs
     ids_from_chars = tf.keras.layers.StringLookup(
-        vocabulary=list(vocab), mask_token=None)
-    ids = ids_from_chars(chars)
+        vocabulary=list(vocab), mask_token=None, num_oov_indices=0, output_mode="int")
+    # ids = ids_from_chars(tf.reshape(chars.to_tensor(), shape=[-1]))
     # print(ids)
 
     # This converts from character IDs to tokens
-    chars_from_ids = tf.keras.layers.StringLookup(
-        vocabulary=ids_from_chars.get_vocabulary(), invert=True, mask_token=None)
-    chars = chars_from_ids(ids)
+    chars_from_ids = None
+    # chars_from_ids = tf.keras.layers.StringLookup(
+    #     vocabulary=ids_from_chars.get_vocabulary(), invert=True, mask_token=None)
+    # chars = chars_from_ids(ids)
     # print(chars)
 
     # Use this function to convert a list of chars to a string
 
-    def text_from_ids(ids):
-        return tf.strings.reduce_join(chars_from_ids(ids), axis=-1)
+    # def text_from_ids(ids):
+    #     return tf.strings.reduce_join(chars_from_ids(ids), axis=-1)
 
     # Now split up the text8 file and convert to ids
     print("Split and convert text to ints.")
@@ -73,8 +74,7 @@ def text8_creator():
     ids_dataset_test = tf.data.Dataset.from_tensor_slices(all_ids[95000000:])
     print("Completed creation on text8 dataset.")
 
-    return ids_dataset_train, ids_dataset_val, ids_dataset_test
-
+    return ids_dataset_train, ids_dataset_val, ids_dataset_test, ids_from_chars, chars_from_ids
 
 # Save the dataset
 # path_to_dataset_folder = "/home/vele/Documents/dev/text8_fun/text8_created"

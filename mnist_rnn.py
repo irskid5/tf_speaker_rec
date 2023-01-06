@@ -115,10 +115,10 @@ ds_train = ds_train.batch(BATCH_SIZE)
 ds_train = ds_train.prefetch(AUTOTUNE)
 
 # Setup for test Dataset
-ds_test = ds_train.map(normalize_img, num_parallel_calls=AUTOTUNE)
+ds_test = ds_test.map(normalize_img, num_parallel_calls=AUTOTUNE)
 ds_test = ds_test.cache()
-ds_test = ds_train.batch(BATCH_SIZE)
-ds_test = ds_train.prefetch(AUTOTUNE)
+ds_test = ds_test.batch(BATCH_SIZE)
+ds_test = ds_test.prefetch(AUTOTUNE)
 
 # Regularizers (None for quantization I believe)
 kernel_regularizer = None # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001)
@@ -127,29 +127,29 @@ bias_regularizer = None
 activation_regularizer = None # tf.keras.regularizers.L2(l2=0.0001)
 
 # Quantization functions (General)
-kernel_quantizer = ternary(alpha=1, threshold=0.05) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.01) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.7*tf.reduce_mean(tf.abs(x))) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
-recurrent_quantizer = ternary(alpha=1, threshold=0.05) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.02) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.08) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
+kernel_quantizer = None # ternary(alpha=1, threshold=0.05) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.01) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.7*tf.reduce_mean(tf.abs(x))) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
+recurrent_quantizer = None # ternary(alpha=1, threshold=0.05) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.02) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.08) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
 bias_quantizer = None # ternary(alpha=1) # quantized_bits(bits=8, integer=8, symmetric=1, keep_negative=True)
 
 # Optional
 soft_thresh_tern = False
 learned_thresh = False
-tern = True
-add_no_acc_reg = True
+tern = False
+add_no_acc_reg = False
 add_dist_loss = False
 acc_precision = 6
 
 # Activation functions
-# activation_irnn = tf.keras.activations.tanh
-# activation_dense = tf.keras.activations.tanh
+activation_irnn = tf.keras.activations.tanh
+activation_dense = tf.keras.activations.tanh
 
 # Activation fns (quantized)
 # activation_irnn = sign_with_tanh_deriv
 # activation_dense = sign_with_tanh_deriv
 
 # Activation fns (quantized with mod)
-activation_irnn = lambda x: custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=acc_precision)
-activation_dense = lambda x: custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=acc_precision)
+# activation_irnn = lambda x: custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=acc_precision)
+# activation_dense = lambda x: custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=acc_precision)
 
 # Initializers
 rnn_kernel_initializer = tf.keras.initializers.VarianceScaling(scale=0.5 if soft_thresh_tern else 1.0, mode="fan_avg", distribution="uniform", seed=SEED) # "he_normal" is default 
@@ -184,7 +184,7 @@ def get_model():
                 add_no_acc_reg=add_no_acc_reg,
                 no_acc_reg_lm=0.001,
                 no_acc_reg_bits=acc_precision,
-                s=10,
+                s=1,
                 name="QRNN_0"),
             TimeReduction(reduction_factor=2),
             QIRNN(
@@ -203,7 +203,7 @@ def get_model():
                 add_no_acc_reg=add_no_acc_reg,
                 no_acc_reg_lm=0.001,
                 no_acc_reg_bits=acc_precision,
-                s=10,
+                s=1,
                 name="QRNN_1"),
             tf.keras.layers.Flatten(),
             QDenseWithNorm(
@@ -230,7 +230,8 @@ def get_model():
                 add_no_acc_reg=False,
                 s=1,
                 name="DENSE_OUT",),
-        ]
+        ],
+        name="MNIST_SIMPLE_RNN",
     )
 
     model.summary()
@@ -256,10 +257,10 @@ pretrained_weights = None
 # pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221216-184318/checkpoints/" # Original, sign_with_tanh, 20221208-134607 init, NoAccRegV2(lm=5e-6,k=4) -> QRNN_0:1.0,QRNN_1:0.99,DENSE_0:0.95, Adam(CosineDecay(1e-4, 100, alpha=0.1), clipnorm=1), 98%
 # pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221220-123439/checkpoints/" # tern input, sign_with_tanh, 20221216-184318 init, NoAccRegV2(lm=5e-6,k=4) -> QRNN_0:1.0,QRNN_1:0.99,DENSE_0:0.95, Adam(CosineDecay(1e-4, 100, alpha=0.1), clipnorm=1), 98%
 
-pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221222-193832/checkpoints/" # og
-pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221222-195050/checkpoints/" # og + sign
-pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221222-202422/checkpoints/" # og + sign + tern
-pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221223-150643/checkpoints/" # og + sign + tern + quant, 92%
+# pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221222-193832/checkpoints/" # og
+# pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221222-195050/checkpoints/" # og + sign
+# pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221222-202422/checkpoints/" # og + sign + tern
+# pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221223-150643/checkpoints/" # og + sign + tern + quant, 92%
 
 # pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221229-123124/checkpoints/" # og + sign + tern + quant + NoAccReg1(0.001 all, 0.005 Dense0), 20221223-150643 init, 71%
 # pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221229-144111/checkpoints/" # og + sign + tern + quant + NoAccReg2(0.001 all, 0.005 Dense0), 20221223-150643 init, 82%
@@ -286,7 +287,7 @@ with strategy.scope():
 
     model.compile(
         # optimizer=larq.optimizers.Bop(threshold=1e-8, gamma=1e-4), # first ever binary optimizer (flips weights based on grads)
-        optimizer=tf.keras.optimizers.Adam(clipnorm=1),
+        optimizer=tf.keras.optimizers.Adam(),
         loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
         metrics=["accuracy"],
     )

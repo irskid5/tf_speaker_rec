@@ -2,6 +2,7 @@ from math import pi
 import tensorflow as tf
 import tensorflow_addons as tfa
 import keras.backend as K
+from keras.engine import data_adapter
 import numpy as np
 # GENERAL UTILS
 from utils.general import *
@@ -88,6 +89,11 @@ class QIRNN(tf.keras.layers.RNN):
         add_dist_loss=False,
         fold_batch_norm=False,
         soft_thresh_tern=False,
+        add_no_acc_reg=False,
+        no_acc_reg_lm=0,
+        no_acc_reg_bits=32,
+        s=1,
+        unroll=False,
         name="", **kwargs):
         
         # Which init are we using?
@@ -114,6 +120,13 @@ class QIRNN(tf.keras.layers.RNN):
         self.add_dist_loss = add_dist_loss
         self.fold_batch_norm = fold_batch_norm
         self.soft_thresh_tern = soft_thresh_tern
+        self.add_no_acc_reg = add_no_acc_reg
+        self.no_acc_reg_lm = no_acc_reg_lm
+        self.no_acc_reg_bits = no_acc_reg_bits
+        self.s = s
+
+        # These are flags that require rnn unrolling
+        to_unroll = unroll or add_dist_loss or add_no_acc_reg
         
         cell = QSimpleRNNCellWithNorm(
                     units,
@@ -132,9 +145,14 @@ class QIRNN(tf.keras.layers.RNN):
                     add_dist_loss=add_dist_loss,
                     fold_batch_norm=fold_batch_norm,
                     soft_thresh_tern=soft_thresh_tern,
+                    add_no_acc_reg=add_no_acc_reg,
+                    no_acc_reg_lm=no_acc_reg_lm,
+                    no_acc_reg_bits=no_acc_reg_bits,
+                    s=s,
+                    name=name,
                 ) if not cell else cell 
             
-        super(QIRNN, self).__init__(cell, return_sequences=True, stateful=stateful, unroll=add_dist_loss, name=name)
+        super(QIRNN, self).__init__(cell, return_sequences=True, stateful=stateful, unroll=to_unroll, name=name)
         
         # IRNN Specific
         self.identity_scale = identity_scale
@@ -314,6 +332,10 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
                 add_dist_loss=False,
                 fold_batch_norm=False,
                 soft_thresh_tern=False,
+                add_no_acc_reg=False,
+                no_acc_reg_lm=0,
+                no_acc_reg_bits=32,
+                s=1,
                 **kwargs):
 
         super(QSimpleRNNCellWithNorm, self).__init__(
@@ -351,11 +373,23 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
             if self.fold_batch_norm:
                 self.recurrent_norm.trainable = False
 
+        # Add distribution loss
         self.dist_loss = None
         if add_dist_loss:
             self.dist_loss = DistributionLossLayer()
         
+        # Soft Threshold Ternarization
         self.soft_thresh_tern = soft_thresh_tern
+
+        # No Accumulation Activity Regularization (must unroll rnn)
+        self.no_acc_reg = None
+        self.no_acc_reg_lm = no_acc_reg_lm
+        self.no_acc_reg_bits = no_acc_reg_bits
+        if add_no_acc_reg:
+            self.no_acc_reg = NoAccRegularizerV2(lm=no_acc_reg_lm, k=2**no_acc_reg_bits, name=kwargs["name"])
+
+        # Gradient scale
+        self.s = s
   
     def build(self, input_shape):
         super(QSimpleRNNCellWithNorm, self).build(input_shape)
@@ -587,7 +621,7 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
 
         # Add two dot products (W_x*x + W_h*h)
         # Division is to control the gradient but output is h_norm + h_2_norm
-        s = 1 # 1000 worked for quant
+        s = self.s # 1000 worked for quant
         output = h_norm/s + h_2_norm/s + tf.stop_gradient(-h_norm/s - h_2_norm/s + h_norm + h_2_norm)
 
         # Add bias if applicable 
@@ -625,6 +659,9 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
 
         # Finally compute the activation
         if self.activation is not None:
+            # No acc regularizer
+            if self.no_acc_reg is not None:
+                output = self.no_acc_reg(output)
             # Add distribution loss if applicable
             if self.dist_loss is not None:
                 output = self.dist_loss(output)
@@ -651,9 +688,13 @@ class QDenseWithNorm(QDense):
                 kernel_range=None,
                 bias_range=None,
                 norm=None,
-                add_dist_loss=True,
+                add_dist_loss=False,
                 fold_batch_norm=False,
                 soft_thresh_tern=False,
+                add_no_acc_reg=False,
+                no_acc_reg_lm=0,
+                no_acc_reg_bits=32,
+                s=1,
                 **kwargs):
 
         self.norm = None
@@ -673,6 +714,16 @@ class QDenseWithNorm(QDense):
 
         # Soft Threshold Ternarization
         self.soft_thresh_tern = soft_thresh_tern
+
+        # No Accumulation Activity Regularization
+        self.no_acc_reg = None
+        self.no_acc_reg_lm = no_acc_reg_lm
+        self.no_acc_reg_bits = no_acc_reg_bits
+        if add_no_acc_reg:
+            self.no_acc_reg = NoAccRegularizerV2(lm=no_acc_reg_lm, k=2**no_acc_reg_bits, name=kwargs["name"])
+
+        # Gradient scale
+        self.s = s
 
         super(QDenseWithNorm, self).__init__(
             units=units,
@@ -806,8 +857,8 @@ class QDenseWithNorm(QDense):
         # Calculate Wx
         h = tf.keras.backend.dot(inputs, quantized_kernel)
 
-        # Norm gradients
-        s = 1 # 1000 worked for quant
+        # Scale gradients
+        s = self.s # 1000 worked for quant
         h = h/s + tf.stop_gradient(-h/s + h)
 
         # Update stats
@@ -828,6 +879,8 @@ class QDenseWithNorm(QDense):
                 quantized_bias = self.bias_quantizer_internal(folded_bias)
             else:
                 quantized_bias = folded_bias
+
+            quantized_bias = quantized_bias + tf.stop_gradient(-quantized_bias + 10000*quantized_bias)
             
             # Add bias to output (Wx + b)
             output = tf.keras.backend.bias_add(output, quantized_bias,
@@ -857,6 +910,9 @@ class QDenseWithNorm(QDense):
                 # output = output - self.delta_kernel_norm + tf.stop_gradient(self.delta_kernel_norm-2000*self.delta_kernel_norm)
 
         if self.activation is not None:
+            # No acc regularizer
+            if self.no_acc_reg is not None:
+                output = self.no_acc_reg(output)
             # Add distribution loss
             if self.dist_loss is not None:
                 output = self.dist_loss(output)
@@ -1002,6 +1058,41 @@ def sign_with_ss_deriv(x):
     q = tf.math.sign(x)
     q += (1.0 - tf.math.abs(q))
     return out + tf.stop_gradient(-out + q)
+
+def custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=8):
+    """
+    Compute x mod 2**num_bits then run relu.
+    Note, no gradient passes from mod op by using tf.stop_gradient
+    """
+    # inner function to wrap stop gradient around to not take gradient into account
+    def _inner_fn(x, num_bits):
+        base = 2**num_bits
+        half_base = 2**(num_bits-1)
+
+        # Cast to int to do modular reduction
+        x_int = tf.cast(x, tf.int32)
+
+        # Perform modular reduction (creating unsigned int)
+        modded = tf.math.mod(x_int, base)
+
+        # Sign the int 
+        signed = tf.where(tf.greater_equal(modded, half_base), modded-base, modded)
+
+        # Cast back to float
+        signed_float = tf.cast(signed, tf.float32)
+
+        return signed_float
+
+    out = sign_with_tanh_deriv(x) + tf.stop_gradient(-sign_with_tanh_deriv(x) + sign_with_tanh_deriv(_inner_fn(x, num_bits=num_bits)))
+
+    # For seeing distribution of input to activation
+    # (Note: The try must be kept or else it will fail on the initial tf graphing)
+    # try:
+    #     plot_histogram_discrete(x, "histogram_of_wxplusb.png")
+    #     plot_histogram_discrete(signed_float, "histogram_of_wxplusb_modded.png")
+    # except:
+    #     return out
+    return out
 
 class TrainableSignSwish(tf.Module):
     def __init__(self, a_init=None, name=""):
@@ -1334,7 +1425,8 @@ class AdaptiveBinaryTernaryRegularizer(tf.Module):
   def get_config(self):
     return {'lm': float(self.lm), "p": self.p, "gamma": self.gamma}
 
-def no_acc_reg_fn(t, b):
+@tf.function
+def no_acc_reg_trig_fn(t, b):
     b2 = b**2
     cos_t = tf.cos(t)
     num = 1 + b2
@@ -1342,7 +1434,7 @@ def no_acc_reg_fn(t, b):
     
     return -1/2*tf.sqrt(num/den)*cos_t
 
-class NoAccRegularizer(tf.Module):
+class NoAccRegularizerV1(tf.keras.layers.Layer):
   """
   This regularizer penalizes results of matrix multiplications that lie in bad regions of the domain
   after a modulo operation is applied.
@@ -1351,13 +1443,13 @@ class NoAccRegularizer(tf.Module):
   sign activation function outputting wrong -1 instead of +1. This is important for binary/ternary
   networks.
   """
-  def __init__(self, lm=0., k=8, a=0.75, name=""):
-    super(NoAccRegularizer, self).__init__()
+  def __init__(self, lm=0.001, k=128, a=3/8., name=""):
+    super(NoAccRegularizerV1, self).__init__()
     self.lm = lm
     self.k = k
     self.a = a
     self.b = a * k
-    self.g_0 = tf.abs(no_acc_reg_fn(2*pi/k * (-k/4 + 1/2), self.b))
+    self.g_0 = tf.abs(no_acc_reg_trig_fn(2*pi/k * (-k/4 + 1/2), self.b))
 
   
   def __call__(self, x):
@@ -1365,12 +1457,73 @@ class NoAccRegularizer(tf.Module):
     t_x = 2*pi/self.k * (tf.abs(x) - self.k/4 + 1/2)
 
     # Run function
-    out = no_acc_reg_fn(t_x, self.b) + self.g_0
+    loss = tf.nn.relu(no_acc_reg_trig_fn(t_x, self.b) + self.g_0)
 
-    return self.lm * tf.reduce_sum(out)
+    self.add_loss(self.lm * tf.reduce_sum(loss))
+    return x
 
   def get_config(self):
-    return {'lm': float(self.lm), "p": self.p, "gamma": self.gamma}
+    return {"lm": float(self.lm), "k": float(self.k), "a": float(self.a), "b": float(self.b), "g_0": float(self.g_0)}
+
+@tf.function
+def no_acc_reg_hat_fn(x, k, a):
+    t_x = 1/k*(tf.abs(x)-(3/4*k-1/2))
+    mod = tf.math.mod(t_x, 1)
+    abs = tf.abs(2*mod-1)
+    out = 2*abs-1
+    return a*tf.nn.relu(out)
+
+@tf.function
+def no_acc_reg_hat_metric_fn(x, k, a):
+    """
+    A function that calculates the ratio between values in correct regions and all values.
+    To be used as input into metric function (ex. tf.keras.metrics.Mean()).
+
+    Takes the sign of the no_acc_reg function which gives you whether a value is in a wrong
+    region (+1) or correct region (0). Adding all the values in the tensor and dividing by the
+    total number of values is effectively the count of wrong values over all values. This is 
+    also more easily represented as the mean of the tensor. 1 - mean(wrongs) gives the ratio
+    of correct values over all values.
+
+    k is the modulus of quantization.
+    a is the height of no_acc_reg_hat_fn.
+
+    Important: this implementation only to be used with no_acc_reg_hat_fn!
+    """
+    wrongs = tf.sign(no_acc_reg_hat_fn(x, k=k, a=a))
+    rights_ratio = 1 - tf.reduce_mean(wrongs, axis=[-1])
+    return rights_ratio
+
+class NoAccRegularizerV2(tf.keras.layers.Layer):
+  """
+  This regularizer penalizes results of matrix multiplications that lie in incorrectly-signed regions of the domain
+  after a modulo operation is applied.
+
+  Ex. if K (modulus) = 8, then a result of Wx_i mod 8 = 4 mod 8 = -4 instead of +4 which can lead a 
+  sign activation function outputting wrong -1 instead of +1. This is important for binary/ternary
+  networks.
+
+  This specific version implements a hat function (ex. __/\__/\__). This is supposed to provide a constant
+  derivative in the incorrect regions to move them to the correct regions.
+  """
+  def __init__(self, lm=1e-3, k=2**8, a=1., name=""):
+    super(NoAccRegularizerV2, self).__init__()
+    self.lm = lm
+    self.k = k
+    self.a = a
+    self.no_acc_metric = tf.keras.metrics.Mean(name='no_acc_metric/'+name)
+
+  def __call__(self, x):
+    loss = tf.square(no_acc_reg_hat_fn(x=x, k=self.k, a=self.a))
+    accuracy = no_acc_reg_hat_metric_fn(x, k=self.k, a=self.a)
+
+    self.add_loss(self.lm * tf.reduce_sum(loss))
+    self.add_metric(self.no_acc_metric(accuracy))
+
+    return x
+
+  def get_config(self):
+    return {'lm': float(self.lm), 'k': int(self.k), 'a': float(self.a)}
 
 class TernaryNormalInitializer(tf.keras.initializers.Initializer):
 
@@ -1422,7 +1575,7 @@ def distribution_loss(pre_acts, size_shape, k_d=1, k_s=0.25, k_m=0.25):
     l_s = tf.math.square(tf.keras.activations.relu(k_s*std - 1))
     l_m = tf.math.square(tf.keras.activations.relu(1 - mean_abs - k_m*std))
 
-    loss = l_d + l_s + 0*l_m # CHANGE BACK
+    loss = l_d + 0*l_s + 0*l_m # CHANGE BACK
 
     return loss
 
@@ -1431,7 +1584,7 @@ class DistributionLossLayer(tf.keras.layers.Layer):
     """
     Adapted from ArXiv:1904.02823 "Regularizing Activation Distribution for Training Binarized Deep Networks"
     """
-    def __init__(self, rate=0, k_d=0, k_s=0.01, k_m=0): # k_d=1, k_s=0.25, k_m=0.25 are default
+    def __init__(self, rate=0.001, k_d=0., k_s=0., k_m=0.): # k_d=1, k_s=0.25, k_m=0.25 are default
         super(DistributionLossLayer, self).__init__()
         self.rate = rate
         self.k_d = k_d
@@ -1687,7 +1840,7 @@ class TimeReduction(tf.keras.layers.Layer):
         })
         return config
 
-def QSelfAttentionMechanismFn(num_hops, hidden_size, inputs, kernel_regularizer, bias_regularizer, kernel_quantizer, bias_quantizer, kernel_initializer, bias_initializer, activation, use_bias, norm, fold_batch_norm, add_dist_loss, soft_thresh_tern, name):
+def QSelfAttentionMechanismFn(num_hops, hidden_size, inputs, kernel_regularizer, bias_regularizer, kernel_quantizer, bias_quantizer, kernel_initializer, bias_initializer, activation, use_bias, norm, fold_batch_norm, add_dist_loss, soft_thresh_tern, learned_thresh, add_no_acc_reg, no_acc_reg_lm, no_acc_reg_bits, s, name):
 
     shp = K.int_shape(inputs)
     T = shp[1]
@@ -1701,13 +1854,17 @@ def QSelfAttentionMechanismFn(num_hops, hidden_size, inputs, kernel_regularizer,
         use_bias=use_bias, 
         kernel_regularizer=kernel_regularizer, # if kernel_regularizer else AdaptiveBinaryTernaryRegularizer(lm=1e-1, name=name+"_QDENSE_0"),
         bias_regularizer=bias_regularizer,
-        kernel_quantizer=kernel_quantizer, # ternary(alpha=1, threshold=0.01), # LearnedThresholdTernary(scale=1.0, threshold=0.005, name=name+"_QDENSE_0"), 0.0032
+        kernel_quantizer=LearnedThresholdTernary(scale=1.0, threshold=0.02, name=name+"_QDENSE_0") if learned_thresh else kernel_quantizer, # 0.0032
         bias_quantizer=bias_quantizer,
         kernel_initializer=kernel_initializer,
         norm=norm,
         fold_batch_norm=fold_batch_norm,
         add_dist_loss=add_dist_loss, # add_dist_loss, CHANGE BACK
         soft_thresh_tern=soft_thresh_tern,
+        add_no_acc_reg=add_no_acc_reg,
+        no_acc_reg_lm=no_acc_reg_lm,
+        no_acc_reg_bits=no_acc_reg_bits,
+        s=s,
         name=name+"_QDENSE_0")(inputs)
 
     # matmul2
@@ -1716,13 +1873,17 @@ def QSelfAttentionMechanismFn(num_hops, hidden_size, inputs, kernel_regularizer,
         use_bias=use_bias, 
         kernel_regularizer=kernel_regularizer, # if kernel_regularizer else AdaptiveBinaryTernaryRegularizer(lm=1e-1, name=name+"_QDENSE_1"),
         bias_regularizer=bias_regularizer,
-        kernel_quantizer=kernel_quantizer, # ternary(alpha=1, threshold=0.01), # LearnedThresholdTernary(scale=1.0, threshold=0.003, name=name+"_QDENSE_1"), 0.00055
+        kernel_quantizer=LearnedThresholdTernary(scale=1.0, threshold=0.02, name=name+"_QDENSE_1") if learned_thresh else kernel_quantizer, # 0.00055
         bias_quantizer=bias_quantizer,
         kernel_initializer=kernel_initializer,
         norm=norm,
         fold_batch_norm=fold_batch_norm,
         add_dist_loss=add_dist_loss, # add_dist_loss, CHANGE BACK
         soft_thresh_tern=soft_thresh_tern,
+        add_no_acc_reg=add_no_acc_reg,
+        no_acc_reg_lm=no_acc_reg_lm,
+        no_acc_reg_bits=no_acc_reg_bits,
+        s=s,
         name=name+"_QDENSE_1")(sa_matmul1)
 
     # transpose
@@ -1734,9 +1895,21 @@ def QSelfAttentionMechanismFn(num_hops, hidden_size, inputs, kernel_regularizer,
     # matmul3
     sa_matmul3 = tf.keras.layers.Dot(axes=[2,1], name=name+"_DOT")([sa_trans, inputs])
 
+    # ADDED THIS TO SEE HOW IT WOULD WORK
+    if add_no_acc_reg:
+        sa_matmul3 = NoAccRegularizerV2(lm=no_acc_reg_lm, k=2**no_acc_reg_bits, name=name+"_DOT")(sa_matmul3)
+    sa_matmul3 = GeneralActivation(activation=activation, name=name+"_act_after_dot")(sa_matmul3)
+
     # sa_avg = tf.keras.layers.GlobalAveragePooling1D(name=name+"_TAP")(sa_matmul3)
 
     sa_output = tf.keras.layers.Reshape([n_h*n_k], name=name+"_OUTPUT")(sa_matmul3)
+
+    # bias_correction = tf.Variable(
+    #     initial_value="zeros",
+    #     trainable=True,
+    #     shape=[n_h*n_k],
+    # )
+    # sa_output = tf.keras.layers.Add()([sa_output, bias_correction])
     # sa_output = tf.keras.layers.Reshape([n_h], name=name+"_OUTPUT")(sa_avg)
 
     return sa_output
@@ -1833,7 +2006,44 @@ class SimpleRNNCellWithProjection(tf.keras.layers.SimpleRNNCell):
 
     def get_config(self):
         return super().get_config().update({"projection_units": self.projection_units})
-    
+
+ 
+class CustomModelWithGradHistograms(tf.keras.models.Model):
+    def train_step(self, data):
+        """The logic for one training step.
+
+        This method can be overridden to support custom training logic.
+        For concrete examples of how to override this method see
+        [Customizing what happens in fit](
+        https://www.tensorflow.org/guide/keras/customizing_what_happens_in_fit).
+        This method is called by `Model.make_train_function`.
+
+        This method should contain the mathematical logic for one step of
+        training.  This typically includes the forward pass, loss calculation,
+        backpropagation, and metric updates.
+
+        Configuration details for *how* this logic is run (e.g. `tf.function`
+        and `tf.distribute.Strategy` settings), should be left to
+        `Model.make_train_function`, which can also be overridden.
+
+        Args:
+          data: A nested structure of `Tensor`s.
+
+        Returns:
+          A `dict` containing values that will be passed to
+          `tf.keras.callbacks.CallbackList.on_train_batch_end`. Typically, the
+          values of the `Model`'s metrics are returned. Example:
+          `{'loss': 0.2, 'accuracy': 0.7}`.
+        """
+        x, y, sample_weight = data_adapter.unpack_x_y_sample_weight(data)
+        # Run forward pass.
+        with tf.GradientTape() as tape:
+            y_pred = self(x, training=True)
+            loss = self.compute_loss(x, y, y_pred, sample_weight)
+        self._validate_target_and_loss(y, loss)
+        # Run backwards pass.
+        self.optimizer.minimize(loss, self.trainable_variables, tape=tape)
+        return self.compute_metrics(x, y, y_pred, sample_weight)
 
 """
 # class SelfAttentionMechanism(tf.keras.layers.Layer):

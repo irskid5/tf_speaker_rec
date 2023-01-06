@@ -19,7 +19,7 @@ from utils.model_utils import TimeReduction, sign_with_tanh_deriv, QDenseWithNor
 from quantization import ternarize_tensor_with_threshold, LearnedThresholdTernary
 
 SEED = 1997
-RUNS_DIR = "/home/vele/Documents/masters/mnist_rnn/runs/"
+RUNS_DIR = "/home/vele/Documents/masters/text8_rnn/runs/"
 TB_LOGS_DIR = "logs/tensorboard/"
 CKPT_DIR = "checkpoints/"
 BACKUP_DIR = "tmp/backup"
@@ -79,28 +79,21 @@ def configure_environment(gpu_names, fp16_run=False, multi_strategy=False):
 
 strategy, _, num_workers = configure_environment(gpu_names=None, fp16_run=False, multi_strategy=True)
 
-(ds_train, ds_test), ds_info = tfds.load(
-    "mnist",
-    split=["train", "test"],
-    shuffle_files=True,
-    as_supervised=True,
-    with_info=True,
-)
+# IMPORT DATASET
 
+path_to_file = tf.keras.utils.get_file('shakespeare.txt', 'https://storage.googleapis.com/download.tensorflow.org/data/shakespeare.txt')
 
-def normalize_img(image, label):
-    """Normalizes images"""
-    return tf.cast(image, tf.float32) / 255.0, label
+# Read, then decode for py2 compat.
+text = open(path_to_file, 'rb').read().decode(encoding='utf-8')
+# length of text is the number of characters in it
+print(f'Length of text: {len(text)} characters')
 
+# Take a look at the first 250 characters in text
+print(text[:250])
 
-def augment(image, label):
-    # if tf.random.uniform((), minval=0, maxval=1) < 0.1:
-    #     image = tf.tile(tf.image.rgb_to_grayscale(image), [1, 1, 3])
-
-    image = tf.image.random_brightness(image, max_delta=0.1)
-    image = tf.image.random_flip_left_right(image)
-
-    return image, label
+# The unique characters in the file
+vocab = sorted(set(text))
+print(f'{len(vocab)} unique characters')
 
 
 AUTOTUNE = tf.data.experimental.AUTOTUNE

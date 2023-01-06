@@ -116,12 +116,12 @@ class LearnedThresholdTernary(BaseQuantizer):
 
         super(LearnedThresholdTernary, self).__init__()
         self.bits = 2
-        # self.threshold = threshold
-        self.threshold = tf.Variable(
-            initial_value=tf.constant(0, dtype=tf.float32) if threshold is None else threshold,
-            trainable=False,
-            name=name+"/tern_threshold"
-        )
+        self.threshold = threshold
+        # self.threshold = tf.Variable(
+        #     initial_value=tf.constant(0, dtype=tf.float32) if threshold is None else threshold,
+        #     trainable=False,
+        #     name=name+"/tern_threshold"
+        # )
         self.scale = scale
         self.initialized = False
         self.qnoise_factor = qnoise_factor
@@ -132,7 +132,7 @@ class LearnedThresholdTernary(BaseQuantizer):
     def __call__(self, x):
         if not self.built:
             self.build(var_name=self.var_name, use_variables=self.use_variables)
-            self.threshold.assign(0.7 * tf.reduce_mean(tf.abs(x)))
+            # self.threshold.assign(0.7 * tf.reduce_mean(tf.abs(x)))
             # sorted = tf.sort(tf.reshape(tf.abs(x), shape=[-1]))
             # t = sorted[int(np.ceil(0.33*len(sorted)))]
             # self.threshold.assign(self.scale * t)

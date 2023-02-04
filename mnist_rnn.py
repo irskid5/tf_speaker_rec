@@ -7,7 +7,7 @@ import io
 import tensorflow as tf
 
 tf.get_logger().setLevel('ERROR')
-tf.config.optimizer.set_jit(True)
+tf.config.optimizer.set_jit("autoclustering")
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -213,8 +213,8 @@ if train:
             callbacks=[tb_callback, ckpt_callback, lr_callback],
             verbose=1,
         )
-    except:
-        pass
+    except Exception as e:
+        print(e)
 
 if test:
     try:

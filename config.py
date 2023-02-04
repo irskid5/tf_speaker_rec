@@ -9,14 +9,14 @@ TB_LOGS_DIR = "logs/tensorboard/"
 CKPT_DIR = "checkpoints/"
 BACKUP_DIR = "tmp/backup"
 RECORD_CKPTS = True
-MULTI_STRATEGY = True
+MULTI_STRATEGY = False
 
 # ----------------------- Data preprocessing -------------------------------
 # VoxCeleb1 specific
 HP_SAMPLE_RATE = hp.HParam('sample_rate', hp.Discrete([16000.0]))
 # VOXCELEB_DIR = "/media/vele/Data/Documents/University Files/Masters/Thesis/dev/datasets/VoxCeleb/VoxCeleb1"
 VOXCELEB_DIR = "/data/dev/masters/data/VoxCeleb1"
-HP_SHUFFLE_BUFFER_SIZE = hp.HParam('shuffle_buffer_size', hp.Discrete([32000])) # 134000 is total size
+HP_SHUFFLE_BUFFER_SIZE = hp.HParam('shuffle_buffer_size', hp.Discrete([16000])) # 32000 historically, 134000 is total size
 
 # Data selection
 # Note: determines the maximum number of frames extracted from each utterance
@@ -55,7 +55,7 @@ HP_NUM_DENSE_UNITS = hp.HParam('num_dense_units', hp.Discrete([2048]))
 # ------------------------------- Training ---------------------------------
 
 # Training parameters
-HP_BATCH_SIZE = hp.HParam('batch_size', hp.Discrete([64])) # , 64]))
+HP_BATCH_SIZE = hp.HParam('batch_size', hp.Discrete([512])) # , 64]))
 # HP_LR = hp.HParam('learning_rate', hp.Discrete([1e-3, 1e-4]))
 HP_LR = hp.HParam('learning_rate', hp.Discrete([1e-3]))
 HP_NUM_EPOCHS = hp.HParam('num_epochs', hp.Discrete([2000]))

@@ -8,7 +8,10 @@ from tqdm import tqdm
 import tensorflow as tf
 
 tf.get_logger().setLevel('ERROR')
-tf.config.optimizer.set_jit(True)
+tf.config.optimizer.set_jit("autoclustering")
+
+# from tensorflow.python.framework.ops import disable_eager_execution
+# disable_eager_execution()
 
 import tensorflow_addons as tfa
 import tensorflow_model_optimization as tfmot
@@ -71,7 +74,10 @@ def configure_environment(gpu_names, fp16_run=False, multi_strategy=False):
             logging.warning(str(e))
 
     # Set how many GPUs you want running
-    # gpus = gpus[0:2]
+    # gpus = gpus[0:2] # [0:2] is for 2 gpus
+
+    # Log the placement of variables
+    tf.debugging.set_log_device_placement(True)
 
     # Set training strategy (mirrored for multi, single for one, depending on availability
     # and multi_strategy flag)
@@ -445,10 +451,10 @@ def run_evaluate(model,
 
         return loss, metrics_results, cm
 
-    # @tf.function(input_signature=[[
-    #     tf.TensorSpec(shape=[None, None, None], dtype=tf.float32),
-    #     tf.TensorSpec(shape=[None], dtype=tf.int64)
-    # ]])
+    @tf.function(input_signature=[[
+        tf.TensorSpec(shape=[None, None], dtype=tf.float32),
+        tf.TensorSpec(shape=[None, None], dtype=tf.float32)
+    ]])
     def eval_step_full(dist_inputs):
         def step_fn(inputs):
             x, y_true = inputs
@@ -789,7 +795,7 @@ def quant_aware_training(_):
         # Log hyperparameters
         hp.hparams(tb_hparams)
 
-def post_quant_test(_):
+def post_quant_test(_, chk_dir=None):
     # Add checkpoint folder
     # checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20220930-161228/checkpoints/" # ternary input
     # checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20221004-125822/checkpoints/"
@@ -797,7 +803,10 @@ def post_quant_test(_):
     # checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20221012-153610/checkpoints/" # reg input, htanh activation (72%)
     # checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20221019-170728/checkpoints/" # reg input, relu, SQ^2 w/ std (74% val)
     # checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/20221020-123140/checkpoints/" # ter input, relu, SQ^2 w/ std (70% val)
-    checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221122-161635/checkpoints/"
+    # checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230113-110440/checkpoints/"
+
+    # Override if value is passes to input
+    checkpoint_dir = chk_dir if chk_dir else checkpoint_dir
 
     # Do we run eagerly for debugging? By default, we don't. Set "True" for here on.
     # tf.config.run_functions_eagerly(True)
@@ -816,10 +825,13 @@ def post_quant_test(_):
     num_workers = 1
     dtype = tf.float32
 
+    if not isinstance(checkpoint_dir, list):
+        checkpoint_dir = [checkpoint_dir]
+
     # Init hparams, choose to load from ckpt or config
     hparams, tb_hparams = setup_hparams(
-        log_dir=checkpoint_dir+"../"+TB_LOGS_DIR,
-        hparam_dir=checkpoint_dir+"../"+TB_LOGS_DIR)
+        log_dir=checkpoint_dir[0]+"../"+TB_LOGS_DIR,
+        hparam_dir=checkpoint_dir[0]+"../"+TB_LOGS_DIR)
 
 
     # Choose batch size (choose 1 if using eval_full)
@@ -838,149 +850,98 @@ def post_quant_test(_):
                                         eval_full=eval_full,
                                         dtype=dtype)
 
-    lr = hparams[HP_LR.name]
-    num_classes = ds_info.features['label'].num_classes
-    penultimate_layer_units = hparams[HP_NUM_DENSE_UNITS.name]
-    # with strategy.scope(): # STATEFUL RNN NOT SUPPORTED WITH DISTRIBUTE STRATEGY
-    # Get model
-    model = get_model(hparams, num_classes-1, stateful=eval_full, inference=True)
+    # g = [1.3, 1.4, 1.5, 2.0]
 
     # Load weights if we starting from checkpoint
     if checkpoint_dir is not None:
-        model.load_weights(checkpoint_dir, by_name=False, skip_mismatch=False).expect_partial()
-        logging.info('Restored weights from {}.'.format(checkpoint_dir))
+        for i, chkp in enumerate(checkpoint_dir):
+            lr = hparams[HP_LR.name]
+            num_classes = ds_info.features['label'].num_classes
+            penultimate_layer_units = hparams[HP_NUM_DENSE_UNITS.name]
+            # with strategy.scope(): # STATEFUL RNN NOT SUPPORTED WITH DISTRIBUTE STRATEGY
+            # Get model
+            model = get_model(hparams, num_classes-1, stateful=eval_full, inference=True)
 
-    # Quantize into tflite model
-    """
-    # Retrieve the config
-    config = model.get_config()
+            # model.load_weights(chkp, by_name=False, skip_mismatch=False).expect_partial()
+            model.load_weights(chkp)
+            tf.print('Restored weights from {}.'.format(chkp))
 
-    # At loading time, register the custom objects with a `custom_object_scope`:
-    custom_objects = {"IRNN": IRNN, "TimeReduction": TimeReduction, "BreakpointLayerForDebug": BreakpointLayerForDebug}
-    with tf.keras.utils.custom_object_scope(custom_objects):
-        model = tf.keras.Model().from_config(config)
+             # Reset the stat variables
+            weights = model.get_weights()
+            for i in range(len(weights)):
+                if "/w" in model.weights[i].name or "/x" in model.weights[i].name or "/inp_" in model.weights[i].name or  "/out_" in model.weights[i].name:
+                    weights[i] = 0*weights[i]
+            model.set_weights(weights)
 
-    converter = tf.lite.TFLiteConverter.from_keras_model(model)
-    converter.experimental_enable_resource_variables = True
-    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+            # Quantize the weights (still floating point)
+            """
+            # print("Old Weights -----------------")
+            # print_weight_stats(model)
+            # model_weights = model.get_weights()
+            # for i in range(len(model_weights)):
+                # plot_histogram_continous(model_weights[i], "old_weights_dist.png")
+                # old_mean = tf.reduce_mean(model_weights[i])
+                # if "bias" in model.weights[i].name:
+                    # continue
+                # model_weights[i] = ternarize_tensor_with_threshold(model_weights[i], theta=2/3*tf.math.reduce_mean(tf.math.abs(model_weights[i])))
+                # model_weights[i] = stochastic_binary()(model_weights[i])
+                # new_mean = tf.reduce_mean(model_weights[i])
+                # model_weights[i] = old_mean/new_mean*model_weights[i]
+                # plot_histogram_discrete(model_weights[i], "new_weights_dist.png")
+            # model.set_weights(model_weights)
+            # print("New Weights -----------------")
+            # print_weight_stats(model)
+            """
 
-    tflite_model_quant = converter.convert()
+            # Compile the model
+            model.compile(
+                optimizer=tf.keras.optimizers.Adam(learning_rate=AttentionLRScheduler(2000, hparams[HP_NUM_LSTM_UNITS.name])),
+                loss={
+                    "DENSE_OUT": tf.keras.losses.CategoricalCrossentropy(from_logits=False, reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE),
+                    # "DENSE_0": CenterLoss(ratio=1, num_classes=(num_classes-1), num_features=penultimate_layer_units,from_logits=True, reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE)
+                },
+                # loss_weights={"DENSE_OUT": 1, "DENSE_0": 0.0001},
+                metrics={"DENSE_OUT": [tf.keras.metrics.CategoricalAccuracy(), tf.keras.metrics.TopKCategoricalAccuracy(k=5)]},
+                jit_compile=True,
+            )
 
-    import pathlib
+            # model.run_eagerly = True
+            
+            print("Start testing!")
 
-    tflite_models_dir = pathlib.Path("tflite_models/")
-    tflite_models_dir.mkdir(exist_ok=True, parents=True)
+            eval_dataset = ds_test
+            eval_metrics = [tf.keras.metrics.categorical_accuracy, tf.keras.metrics.top_k_categorical_accuracy]
+            with_cm = False
+            eval_res = run_evaluate(
+                model, 
+                optimizer=tf.keras.optimizers.Adam(learning_rate=lr), 
+                loss_fn=tf.keras.losses.categorical_crossentropy, 
+                eval_dataset=eval_dataset, 
+                batch_size=batch_size, 
+                strategy=strategy,
+                hparams=hparams,
+                num_classes=num_classes-1,
+                metrics=eval_metrics, 
+                fp16_run=False,
+                eval_full=eval_full,
+                with_cm=with_cm)
 
-    # Save the quantized model:
-    tflite_model_quant_file = tflite_models_dir/"model_quant.tflite"
-    tflite_model_quant_file.write_bytes(tflite_model_quant)
+            # Confusion matrix analysis
+            if with_cm:
+                print("Confusion Matrix selected")
+                print("Saving Confusion Matrix")
+                run_date = checkpoint_dir.split('/')[1]
+                cm_dict = {idx: {i: int(v) for i, v in enumerate(val)} for idx, val in enumerate(eval_res['cm'])}
+                cm = ConfusionMatrix(matrix=cm_dict)
+                print("Saving CSV")
+                cm.save_csv("cm_"+run_date)
+                print("Saving Stat")
+                cm.save_stat("cm_stats_"+run_date)
+                eval_res.pop('cm', None)
 
-    '''
-    Create interpreter, allocate tensors
-    '''
-    tflite_interpreter = tf.lite.Interpreter("tflite_models/model_quant.tflite")
-    tflite_interpreter.allocate_tensors()
-
-    '''
-    Check input/output details
-    '''
-    input_details = tflite_interpreter.get_input_details()
-    output_details = tflite_interpreter.get_output_details()
-
-    print("== Input details ==")
-    print("name:", input_details[0]['name'])
-    print("shape:", input_details[0]['shape'])
-    print("type:", input_details[0]['dtype'])
-    print("\n== Output details ==")
-    print("name:", output_details[0]['name'])
-    print("shape:", output_details[0]['shape'])
-    print("type:", output_details[0]['dtype'])
-
-
-    '''
-    This gives a list of dictionaries. 
-    '''
-    tensor_details = tflite_interpreter.get_tensor_details()
-
-    for dict in tensor_details:
-        i = dict['index']
-        tensor_name = dict['name']
-        scales = dict['quantization_parameters']['scales']
-        zero_points = dict['quantization_parameters']['zero_points']
-        tensor = tflite_interpreter.tensor(i)()
-
-        print(i, type, tensor_name, scales.shape, zero_points.shape, tensor.shape)
-
-    """
-
-    # Quantize the weights (still floating point)
-    print("Old Weights -----------------")
-    print_weight_stats(model)
-    model_weights = model.get_weights()
-    for i in range(len(model_weights)):
-        # plot_histogram_continous(model_weights[i], "old_weights_dist.png")
-        # old_mean = tf.reduce_mean(model_weights[i])
-        if "bias" in model.weights[i].name:
-            continue
-        # model_weights[i] = ternarize_tensor_with_threshold(model_weights[i], theta=2/3*tf.math.reduce_mean(tf.math.abs(model_weights[i])))
-        # model_weights[i] = stochastic_binary()(model_weights[i])
-        # new_mean = tf.reduce_mean(model_weights[i])
-        # model_weights[i] = old_mean/new_mean*model_weights[i]
-        # plot_histogram_discrete(model_weights[i], "new_weights_dist.png")
-    model.set_weights(model_weights)
-    print("New Weights -----------------")
-    print_weight_stats(model)
-
-    # Compile the model
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=AttentionLRScheduler(2000, hparams[HP_NUM_LSTM_UNITS.name])),
-        loss={
-            "DENSE_OUT": tf.keras.losses.CategoricalCrossentropy(from_logits=True, reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE),
-            # "DENSE_0": CenterLoss(ratio=1, num_classes=(num_classes-1), num_features=penultimate_layer_units,from_logits=True, reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE)
-        },
-        # loss_weights={"DENSE_OUT": 1, "DENSE_0": 0.0001},
-        metrics={"DENSE_OUT": [tf.keras.metrics.CategoricalAccuracy(), tf.keras.metrics.TopKCategoricalAccuracy(k=5)]},
-    )
-
-    # model.run_eagerly = True
-    
-    print("Start testing!")
-
-    eval_dataset = ds_test
-    eval_metrics = [tf.keras.metrics.categorical_accuracy, tf.keras.metrics.top_k_categorical_accuracy]
-    with_cm = False
-    eval_res = run_evaluate(
-        model, 
-        optimizer=tf.keras.optimizers.Adam(learning_rate=lr), 
-        loss_fn=tf.keras.losses.categorical_crossentropy, 
-        eval_dataset=eval_dataset.take(100), 
-        batch_size=batch_size, 
-        strategy=strategy,
-        hparams=hparams,
-        num_classes=num_classes-1,
-        metrics=eval_metrics, 
-        fp16_run=False,
-        eval_full=eval_full,
-        with_cm=with_cm)
-
-    # Confusion matrix analysis
-    if with_cm:
-        print("Confusion Matrix selected")
-        print("Saving Confusion Matrix")
-        run_date = checkpoint_dir.split('/')[1]
-        cm_dict = {idx: {i: int(v) for i, v in enumerate(val)} for idx, val in enumerate(eval_res['cm'])}
-        cm = ConfusionMatrix(matrix=cm_dict)
-        print("Saving CSV")
-        cm.save_csv("cm_"+run_date)
-        print("Saving Stat")
-        cm.save_stat("cm_stats_"+run_date)
-        eval_res.pop('cm', None)
-
-    # Show final results
-    print("Final Results: ")
-    print(eval_res)
-
-    print("End of Testing")
+            # Show final results
+            print('Final Results ({}): {}'.format(chkp, eval_res))
+            print("End of Testing")
 
 def qkeras_qat(_):
     # Get run dir
@@ -1044,9 +1005,9 @@ def qkeras_qat(_):
     # LARGER NETWORKS
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221117-163745/checkpoints/" # Original (x4) w/ SS(1), clipnorm=0.1, 33%
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221118-115744/checkpoints/" # ter input (x4) w/ SS(1), stochastic_ternary(t=0.25) quant, 2% so far but training
-    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221120-134420/checkpoints/" # Original (all x3 except dense, hops) w/ tanh, ATSCH(5400, HP_NUM_SELF_ATT_UNITS)), default rnn init, 75%
+    pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221120-134420/checkpoints/" # Original (all x3 except dense, hops) w/ tanh, ATSCH(5400, HP_NUM_SELF_ATT_UNITS)), default rnn init, 75%
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221125-184845/checkpoints/" # Original (all x3 except dense, hops) w/ tanh, lr=1e-4, dist_loss(10, kd=1, all else 0), default rnn init, 77%
-    pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221125-020548/checkpoints/" # Original (all x3 except dense, hops) w/ sign_with_tanh, lr=1e-4, clipnorm=1, dist_loss(10, kd=1, all else 0), 20221120-134420 init, 70%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221125-020548/checkpoints/" # Original (all x3 except dense, hops) w/ sign_with_tanh, lr=1e-4, clipnorm=1, dist_loss(10, kd=1, all else 0), 20221120-134420 init, 70%
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221121-152133/checkpoints/" # Original (all x3 except dense, hops) w/ sign_with_htan, ATSCH(5400, HP_NUM_SELF_ATT_UNITS)), 20221120-134420 init, 65%
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221126-153524/checkpoints/" # Original (all x3 except dense, hops) w/ sign_with_tanh, lr=1e-4, dist_loss(10, kd=1, all else 0), 20221125-184845 init, 67%
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221125-112620/checkpoints/" # tern input (all x3 except dense, hops) w/ sign_with_tanh, lr=1e-4, dist_loss(10, kd=1, all else 0), 20221125-020548 init, 63%
@@ -1065,10 +1026,21 @@ def qkeras_qat(_):
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202212/20221231-164111/checkpoints/" # Original (all x3 except dense, hops) w/ tanh, lr=1e-4, L2(0.0001), default rnn init, 79%
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230102-131137/checkpoints/" # Original (all x3 except dense, hops) w/ sign_with_tanh, lr=1e-4, L2(0.0001), default rnn init, 63%    
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230103-154655/checkpoints/"
-    pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230104-190554/checkpoints/" # Original (all x3 except dense, hops) w/ sign_with_tanh, act after dot, lr=1e-4, 20221125-020548 init, 65.78%    
-    pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230105-030219/checkpoints/" # tern input (all x3 except dense, hops) w/ sign_with_tanh, act after dot, lr=1e-4, 20230104-190554 init, 59.81%   
-
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230104-190554/checkpoints/" # Original (all x3 except dense, hops) w/ sign_with_tanh, act after dot, lr=1e-4, 20221125-020548 init, 65.78%    
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230105-030219/checkpoints/" # tern input (all x3 except dense, hops) w/ sign_with_tanh, act after dot, lr=1e-4, 20230104-190554 init, 59.81%   
+    
+    # NETWORKS FFROM LARGER NETWORKS WITH QUANT
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230113-134834/checkpoints/"
     # NOTE: The 44% fully-quantized run was 20221130-215651
+
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230124-005909/checkpoints/" # bs=300, g=1.5 with different ones prop. to size of weights, NAR(1e-2, 11bit) only on Dense_0, lr=1e-7, clipnorm=1, sign_with_tanh_mod, 20221125-112620 init, 39%, 
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230124-005909/checkpoints/" # bs=300, g=1.5 with different ones prop. to size of weights, NAR(1e-3, 10bit) only on Dense_0, lr=0, clipnorm=1, sign_with_tanh_mod, 20230124-005909 init, 21%, 
+    # pretrained_weights  = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230125-194623/checkpoints/" # bs=300, g=1.5 with different ones prop. to size of weights, NAR(1e-2, 8bit) on all exc. RNN0, lr=0, clipnorm=1, sign_with_tanh, 20230113-134834 init, bad %,
+
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230127-100353/checkpoints/"
+    
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230127-225022/checkpoints/" # Original (all x3 except dense, hops) w/ sign_with_tanh, lr=cos(1e-4->1e-5, 60), NAR(8bit, 1e-3), bs=512, 20221120-134420 init, 66%
+    pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230128-123500/checkpoints/" # tern input (all x3 except dense, hops) w/ sign_with_tanh, lr=cos(1e-4->1e-5, 60), NAR(8bit, 1e-3), bs=512, 20230127-225022 init, 62%
 
     # Init the environment
     strategy, dtype, num_workers = configure_environment(
@@ -1112,69 +1084,50 @@ def qkeras_qat(_):
         # Reset the stat variables
         weights = model.get_weights()
         for i in range(len(weights)):
-            if "/w" in model.weights[i].name or "/x" in model.weights[i].name:
+            if "/w" in model.weights[i].name or "/x" in model.weights[i].name or "/inp_" in model.weights[i].name or "/out_" in model.weights[i].name:
                 weights[i] = 0*weights[i]
         model.set_weights(weights)
+
+        # Calculate total weight stats
+        for layer in model.layers:
+            if len(layer.trainable_weights) > 0:
+                all_weights = tf.concat([tf.reshape(x, shape=[-1]) for x in layer.trainable_weights], axis=-1)
+                tf.print("STD of all weights in ", layer.name, 1.0*tf.math.reduce_std(tf.abs(all_weights)))
+        all_weights = tf.concat([tf.reshape(x, shape=[-1]) for x in model.trainable_weights], axis=-1)
+        tf.print("STD of all weights in ", model.name, 1.0*tf.math.reduce_std(tf.abs(all_weights)))
 
         save_hparams(hparams, run_dir+TB_LOGS_DIR)
 
         model.compile(
             # optimizer=larq.optimizers.Bop(threshold=1e-3, gamma=1e-2), # first ever binary optimizer (flips weights based on grads)
             # optimizer=tf.keras.optimizers.Adam(learning_rate=AttentionLRScheduler(2000, 768)),
-            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5, clipnorm=1), # 1e-5 worked for quant with clipnorm=1
+            optimizer=tf.keras.optimizers.Adam(clipnorm=1), # 1e-5 worked for quant with clipnorm=1
             loss={
                 "DENSE_OUT": tf.keras.losses.CategoricalCrossentropy(from_logits=False, reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE),
                 # "DENSE_0": CenterLoss(ratio=1, num_classes=(num_classes-1), num_features=penultimate_layer_units, from_logits=True, reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE)
             },
             # loss_weights={"DENSE_OUT": 1, "DENSE_0": 0.0001},
             metrics={"DENSE_OUT": [tf.keras.metrics.CategoricalAccuracy(), tf.keras.metrics.TopKCategoricalAccuracy(k=5)]},
+            jit_compile=True
         )
 
     # model.run_eagerly = True
 
-    class ExtendedTensorBoard(tf.keras.callbacks.TensorBoard):
-        def _log_gradients(self, epoch):
-            step = tf.cast(epoch, dtype=tf.int64)
-            writer = self._train_writer
-            # writer = self._get_writer(self._train_run_name)
-            
-            # here we use test data to calculate the gradients
-            features, y_true = list(ds_val.take(1))[0]
-            with tf.GradientTape(persistent=True, watch_accessed_variables=True) as tape:
-                tape.watch(self.model.trainable_weights)
-                y_pred = self.model(features)  # forward-propagation
-                loss = self.model.loss["DENSE_OUT"](y_true=y_true, y_pred=y_pred[0])  # calculate loss
-                gradients = tape.gradient(loss, self.model.trainable_weights)  # back-propagation
-
-            with writer.as_default():
-                # In eager mode, grads does not have name, so we get names from model.trainable_weights
-                for weights, grads in zip(self.model.trainable_weights, gradients):
-                    mean = tf.reduce_mean(tf.abs(grads))
-                    tf.summary.scalar('grad_mean_{}'.format(weights.name), mean)
-                    tf.summary.histogram(
-                        weights.name.replace(':', '_')+'_grads', data=grads, step=step)
-            writer.flush()
-
-        # def on_epoch_end(self, epoch, logs=None):  
-        def on_train_batch_end(self, batch, logs={}):  
-            # This function overwrites the on_epoch_end in tf.keras.callbacks.TensorBoard
-            # but we do need to run the original on_epoch_end, so here we use the super function. 
-            # super(ExtendedTensorBoard, self).on_epoch_end(epoch, logs=logs)
-            super(ExtendedTensorBoard, self).on_train_batch_end(batch, logs=logs)
-            if self.histogram_freq and batch % self.histogram_freq == 0:
-                self._log_gradients(batch)
-
     # Define callbacks
     tb_callback = tf.keras.callbacks.TensorBoard(
-        log_dir=(run_dir + TB_LOGS_DIR), histogram_freq=1, update_freq="epoch", # profile_batch='100,200'
+        log_dir=(run_dir + TB_LOGS_DIR), histogram_freq=1, update_freq="epoch", # profile_batch='10,15'
+    )
+
+    lr_callback = tf.keras.callbacks.LearningRateScheduler(
+        tf.keras.optimizers.schedules.CosineDecay(2e-6, 30, 1e-1), verbose=0
     )
 
     if RECORD_CKPTS:
         ckpt_callback = tf.keras.callbacks.ModelCheckpoint(filepath=(run_dir + CKPT_DIR),
                                                     save_weights_only=True,
                                                     save_best_only=True,
-                                                    monitor="val_DENSE_OUT_loss",
-                                                    mode="min",
+                                                    monitor="val_DENSE_OUT_categorical_accuracy",
+                                                    mode="max",
                                                     verbose=1)
     else:
         ckpt_callback = None
@@ -1182,9 +1135,9 @@ def qkeras_qat(_):
     # NOTE: OneDeviceStrategy does not work with BackupAndRestore
     # fault_tol_callback = tf.keras.callbacks.experimental.BackupAndRestore(backup_dir=(RUN_DIR + BACKUP_DIR))
 
-    early_stop_callback = tf.keras.callbacks.EarlyStopping(
-        monitor='val_DENSE_OUT_categorical_accuracy', min_delta=0.0001, patience=3, verbose=1
-    )
+    # early_stop_callback = tf.keras.callbacks.EarlyStopping(
+    #     monitor='val_DENSE_OUT_categorical_accuracy', min_delta=0.0001, patience=3, verbose=1
+    # )
 
     # reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.2,
     #                           patience=4, min_lr=0.0001)
@@ -1193,26 +1146,35 @@ def qkeras_qat(_):
     # qnoise_callback = qcallbacks.QNoiseScheduler(1, 200, freq_type="epoch", use_ste=True, log_dir=(run_dir + TB_LOGS_DIR))
 
     # Train
+    train = True
     num_epochs = hparams[HP_NUM_EPOCHS.name]
-    try:
-        model.fit(
-            ds_train,
-            epochs=num_epochs,
-            validation_data=ds_val,
-            callbacks=[tb_callback, ckpt_callback],
-            verbose=1,
-            # initial_epoch=221 # change for checkpoint !!!!
-            # steps_per_epoch=20 # FOR TESTING TO MAKE EPOCH SHORTER
-        )
-    except Exception as e:
-        print(e)
-        print("In Exception")
-        pass
+    if train:
+        try:
+            model.fit(
+                ds_train,
+                epochs=num_epochs,
+                validation_data=ds_val,
+                callbacks=[tb_callback, ckpt_callback, lr_callback],
+                verbose=1,
+                # initial_epoch=77 # change for checkpoint !!!!
+                # steps_per_epoch=20 # FOR TESTING TO MAKE EPOCH SHORTER
+            )
+        except Exception as e:
+            print(e)
+            print("In Exception")
+            pass
 
     # Log results
     with tf.summary.create_file_writer((run_dir+TB_LOGS_DIR)).as_default():
         # Log hyperparameters
         hp.hparams(tb_hparams)
+
+    # Add test at end of code
+    test = False
+    pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230113-184346/checkpoints/"
+    if test:
+        post_quant_test(_, chk_dir=(pretrained_weights))
+        # post_quant_test(_, chk_dir=(run_dir + CKPT_DIR))
 
 def print_weight_stats(model):
     weights = model.weights
@@ -1226,11 +1188,18 @@ def print_weight_stats(model):
 
 if __name__ == '__main__':
     tf.config.run_functions_eagerly(False)
+    tf.keras.backend.clear_session()
     # app.run(main)
     # app.run(hparam_search)
     # app.run(test_model)
     # app.run(quant_aware_training)
-    # app.run(post_quant_test)
+    # post_quant_test(
+    #     None, 
+    #     chk_dir=[
+    #         "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230127-100353/checkpoints/", 
+    #         # "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221125-112620/checkpoints/",
+    #     ]
+    # )
     app.run(qkeras_qat)
     print("End")
 

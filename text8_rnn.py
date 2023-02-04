@@ -6,6 +6,7 @@ os.environ["TF_GPU_THREAD_MODE"] = "gpu_private"
 
 import io
 import tensorflow as tf
+from keras.utils.layer_utils import count_params
 
 tf.get_logger().setLevel('ERROR')
 tf.config.optimizer.set_jit(True)
@@ -95,13 +96,13 @@ def split_input_target_and_one_hot(sequence):
 
 SEQ_LEN = 50
 AUTOTUNE = tf.data.experimental.AUTOTUNE
-BATCH_SIZE = 128*num_workers
+BATCH_SIZE = 64*num_workers
 
 # Setup for train dataset
 ds_train = ds_train.batch(SEQ_LEN+1, drop_remainder=True)
 ds_train = ds_train.map(split_input_target_and_one_hot, num_parallel_calls=AUTOTUNE)
 ds_train = ds_train.cache()
-ds_train = ds_train.shuffle(buffer_size=1000000)
+ds_train = ds_train.shuffle(buffer_size=1800000)
 ds_train = ds_train.batch(BATCH_SIZE, drop_remainder=True)
 ds_train = ds_train.prefetch(AUTOTUNE)
 
@@ -121,39 +122,38 @@ ds_test = ds_test.prefetch(AUTOTUNE)
 
 # Regularizers (None for quantization I believe)
 kernel_regularizer = None # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001)
-recurrent_regularizer = None # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # BinaryEuclideanRegularizer(l2=1e-6) #TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4)
+recurrent_regularizer = None # tf.keras.regularizers.L2(0.0001) # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # BinaryEuclideanRegularizer(l2=1e-6) #TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4)
 bias_regularizer = None
 activation_regularizer = None # tf.keras.regularizers.L2(l2=0.0001)
 
 # Quantization functions (General)
-kernel_quantizer = None # ternary(alpha=1, threshold=0.05) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.01) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.7*tf.reduce_mean(tf.abs(x))) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
-recurrent_quantizer = None # ternary(alpha=1, threshold=0.05) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.02) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.08) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
+kernel_quantizer = ternary(alpha=1, threshold=0.0911449715) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.01) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.7*tf.reduce_mean(tf.abs(x))) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
+recurrent_quantizer = ternary(alpha=1, threshold=0.0911449715) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.02) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.08) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
 bias_quantizer = None # ternary(alpha=1) # quantized_bits(bits=8, integer=8, symmetric=1, keep_negative=True)
 
 # Optional
 soft_thresh_tern = False
-learned_thresh = False
-tern = False
-add_no_acc_reg = False
+learned_thresh = True
+add_no_acc_reg = True
 add_dist_loss = False
 acc_precision = 6
 
 # Activation functions
-activation_irnn = tf.keras.activations.relu
-activation_dense = tf.keras.activations.relu
+# activation_irnn = tf.keras.activations.tanh
+# activation_dense = tf.keras.activations.tanh
 
 # Activation fns (quantized)
-# activation_irnn = sign_with_tanh_deriv
-# activation_dense = sign_with_tanh_deriv
+activation_irnn = sign_with_tanh_deriv
+activation_dense = sign_with_tanh_deriv
 
 # Activation fns (quantized with mod)
 # activation_irnn = lambda x: custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=acc_precision)
 # activation_dense = lambda x: custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=acc_precision)
 
 # Initializers
-rnn_kernel_initializer = tf.keras.initializers.VarianceScaling(scale=0.5 if soft_thresh_tern else 1.0, mode="fan_avg", distribution="uniform", seed=SEED) # "he_normal" is default 
-rnn_recurrent_initializer = tf.keras.initializers.Identity()
-dense_kernel_initializer = tf.keras.initializers.VarianceScaling(scale=0.5 if soft_thresh_tern else 1.0, mode="fan_avg", distribution="uniform", seed=SEED) # "he_normal" is default 
+rnn_kernel_initializer = tf.keras.initializers.GlorotUniform(seed=SEED) # tf.keras.initializers.VarianceScaling(scale=0.5 if soft_thresh_tern else 1.0, mode="fan_avg", distribution="uniform", seed=SEED) # "he_normal" is default 
+rnn_recurrent_initializer = tf.keras.initializers.Orthogonal(seed=SEED) # tf.keras.initializers.Identity()
+dense_kernel_initializer = tf.keras.initializers.HeNormal(seed=SEED) # tf.keras.initializers.VarianceScaling(scale=0.5 if soft_thresh_tern else 1.0, mode="fan_avg", distribution="uniform", seed=SEED) # "he_normal" is default 
 
 
 def get_model():
@@ -168,19 +168,19 @@ def get_model():
                 return_sequences=True, 
                 kernel_regularizer=kernel_regularizer, 
                 recurrent_regularizer=recurrent_regularizer,
-                kernel_quantizer=LearnedThresholdTernary(scale=1.0, threshold=0.1, name="QRNN_0/quantized_kernel") if learned_thresh else kernel_quantizer,
-                recurrent_quantizer=LearnedThresholdTernary(scale=1.0, threshold=0.05, name="QRNN_0/quantized_recurrent") if learned_thresh else recurrent_quantizer,
+                kernel_quantizer=LearnedThresholdTernary(scale=1.0, threshold=0.0917167813, name="QRNN_0/quantized_kernel") if learned_thresh else kernel_quantizer,
+                recurrent_quantizer=LearnedThresholdTernary(scale=1.0, threshold=0.0917167813, name="QRNN_0/quantized_recurrent") if learned_thresh else recurrent_quantizer,
                 kernel_initializer=rnn_kernel_initializer,
                 recurrent_initializer=rnn_recurrent_initializer,
                 add_dist_loss=add_dist_loss,
                 add_no_acc_reg=add_no_acc_reg,
-                no_acc_reg_lm=0.001,
+                no_acc_reg_lm=0.,
                 no_acc_reg_bits=acc_precision,
                 s=1,
                 name="QRNN_0"),
             # QIRNN(
             #     cell=None,
-            #     units=256,  
+            #     units=2048,  
             #     activation=activation_irnn, 
             #     use_bias=False, 
             #     return_sequences=True, 
@@ -192,12 +192,12 @@ def get_model():
             #     recurrent_initializer=rnn_recurrent_initializer,
             #     add_dist_loss=add_dist_loss,
             #     add_no_acc_reg=add_no_acc_reg,
-            #     no_acc_reg_lm=0.001,
+            #     no_acc_reg_lm=0.,
             #     no_acc_reg_bits=acc_precision,
             #     s=1,
             #     name="QRNN_1"),
             # QDenseWithNorm(
-            #     1024, 
+            #     2048, 
             #     activation=activation_dense, 
             #     use_bias=False,
             #     kernel_regularizer=kernel_regularizer, 
@@ -214,7 +214,7 @@ def get_model():
                 use_bias=False,
                 activation=tf.keras.activations.softmax, 
                 kernel_regularizer=kernel_regularizer, 
-                kernel_quantizer=LearnedThresholdTernary(scale=1.0, name="DENSE_OUT/quantized_kernel") if learned_thresh else kernel_quantizer,
+                kernel_quantizer=LearnedThresholdTernary(scale=1.0, threshold=0.0148221422, name="DENSE_OUT/quantized_kernel") if learned_thresh else kernel_quantizer,
                 kernel_initializer=dense_kernel_initializer, 
                 add_dist_loss=add_dist_loss,
                 add_no_acc_reg=False,
@@ -237,6 +237,13 @@ if checkpoint_dir:
 pretrained_weights = None
 
 # pretrained_weights = "/home/vele/Documents/masters/text8_rnn/runs/202301/20230106-143250/checkpoints/"
+# pretrained_weights = "/home/vele/Documents/masters/text8_rnn/runs/202301/20230106-163114/checkpoints/" # Same as 1608.06902, batch 128*4 gpus, 1.74 BPC
+# pretrained_weights = "/home/vele/Documents/masters/text8_rnn/runs/202301/20230108-130720/checkpoints/" # Same as 1608.06902, tanh act, batch 128*4 gpus, 1.72 BPC
+pretrained_weights = "/home/vele/Documents/masters/text8_rnn/runs/202301/20230108-175415/checkpoints/" # Same as 1608.06902, sign_with_tanh act, batch 128*4 gpus, 20230108-130720 init, 1.829 BPC
+
+@tf.function
+def bpc(y_true, y_pred):
+    return np.log2(np.e)*tf.keras.losses.categorical_crossentropy(y_true=y_true, y_pred=y_pred, from_logits=False)
 
 with strategy.scope():
     model = get_model()
@@ -252,17 +259,22 @@ with strategy.scope():
 
     # Reset the stat variables
     weights = model.get_weights()
+    sum = tf.constant(0, dtype=tf.float32);
     for i in range(len(weights)):
         if "/w" in model.weights[i].name or "/x" in model.weights[i].name:
             weights[i] = 0*weights[i]
     model.set_weights(weights)
 
+    # Calculate total weight stats
+    for layer in model.layers:
+        all_weights = tf.concat([tf.reshape(x, shape=[-1]) for x in layer.trainable_weights], axis=-1)
+        tf.print("STD of all weights in {}: {}", layer.name, 0.7*tf.math.reduce_std(tf.abs(all_weights)))
+
     model.compile(
         # optimizer=larq.optimizers.Bop(threshold=1e-8, gamma=1e-4), # first ever binary optimizer (flips weights based on grads)
-        optimizer=tf.keras.optimizers.Adam(),
+        optimizer=tf.keras.optimizers.Adam(clipnorm=1),
         loss={"DENSE_OUT": tf.keras.losses.CategoricalCrossentropy(from_logits=False)},
-        loss_weights={"DENSE_OUT": np.log2(np.e)},
-        metrics=["accuracy"],
+        metrics={"DENSE_OUT": ["accuracy", bpc]},
     )
 
 # model.run_eagerly = True
@@ -274,7 +286,7 @@ tb_callback = tf.keras.callbacks.TensorBoard(
 
 # Add a lr decay callback
 lr_callback = tf.keras.callbacks.LearningRateScheduler(
-    tf.keras.optimizers.schedules.CosineDecay(1e-4, 500, alpha=0.1),
+    tf.keras.optimizers.schedules.CosineDecay(1e-5, 500, alpha=0.1),
     verbose=0,
 )
 
@@ -300,18 +312,18 @@ if train:
             callbacks=[tb_callback, ckpt_callback, lr_callback],
             verbose=1,
         )
-    except:
-        pass
+    except Exception as e:
+        print(e)
 
 if test:
     try:
-        for _ in range(10):
+        for _ in range(2):
             model.evaluate(
                 x=ds_test,
                 verbose=1,
             )
-    except:
-        pass
+    except Exception as e:
+        print(e)
 
 print("End!")
 

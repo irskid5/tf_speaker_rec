@@ -2,6 +2,8 @@ from math import pi
 import tensorflow as tf
 import tensorflow_addons as tfa
 import keras.backend as K
+# from keras import backend
+# from keras.utils import generic_utils
 from keras.engine import data_adapter
 import numpy as np
 # GENERAL UTILS
@@ -165,12 +167,171 @@ class QIRNN(tf.keras.layers.RNN):
         # Quantizers (specfically for QNoiseScheduler)
         self.quantizers = self.get_quantizers()
 
-    # def build(self, input_shape):
-    #     super(QIRNN, self).build(input_shape)
-    #     if self.kernel_norm:
-    #         self.kernel_norm.build(input_shape)
-    #     if self.recurrent_norm:
-    #         self.recurrent_norm.build(input_shape)
+    """
+    def call( 
+        self,
+        inputs,
+        mask=None,
+        training=None,
+        initial_state=None,
+        constants=None,):
+
+        # The input should be dense, padded with zeros. If a ragged input is fed
+        # into the layer, it is padded and the row lengths are used for masking.
+        inputs, row_lengths = backend.convert_inputs_if_ragged(inputs)
+        is_ragged_input = row_lengths is not None
+        self._validate_args_if_ragged(is_ragged_input, mask)
+
+        inputs, initial_state, constants = self._process_inputs(
+            inputs, initial_state, constants
+        )
+
+        self._maybe_reset_cell_dropout_mask(self.cell)
+        if isinstance(self.cell, tf.keras.layers.StackedRNNCells):
+            for cell in self.cell.cells:
+                self._maybe_reset_cell_dropout_mask(cell)
+
+        if mask is not None:
+            # Time step masks must be the same for each input.
+            # TODO(scottzhu): Should we accept multiple different masks?
+            mask = tf.nest.flatten(mask)[0]
+
+        if tf.nest.is_nested(inputs):
+            # In the case of nested input, use the first element for shape
+            # check.
+            input_shape = backend.int_shape(tf.nest.flatten(inputs)[0])
+        else:
+            input_shape = backend.int_shape(inputs)
+        timesteps = input_shape[0] if self.time_major else input_shape[1]
+        if self.unroll and timesteps is None:
+            raise ValueError(
+                "Cannot unroll a RNN if the "
+                "time dimension is undefined. \n"
+                "- If using a Sequential model, "
+                "specify the time dimension by passing "
+                "an `input_shape` or `batch_input_shape` "
+                "argument to your first layer. If your "
+                "first layer is an Embedding, you can "
+                "also use the `input_length` argument.\n"
+                "- If using the functional API, specify "
+                "the time dimension by passing a `shape` "
+                "or `batch_shape` argument to your Input layer."
+            )
+
+        kwargs = {}
+        if generic_utils.has_arg(self.cell.call, "training"):
+            kwargs["training"] = training
+
+        # TF RNN cells expect single tensor as state instead of list wrapped
+        # tensor.
+        is_tf_rnn_cell = getattr(self.cell, "_is_tf_rnn_cell", None) is not None
+        # Use the __call__ function for callable objects, eg layers, so that it
+        # will have the proper name scopes for the ops, etc.
+        cell_call_fn = (
+            self.cell.__call__ if callable(self.cell) else self.cell.call
+        )
+
+        losses_var = []
+
+        if constants:
+            if not generic_utils.has_arg(self.cell.call, "constants"):
+                raise ValueError(
+                    f"RNN cell {self.cell} does not support constants. "
+                    f"Received: constants={constants}"
+                )
+
+            def step(inputs, states):
+                constants = states[-self._num_constants :]
+                states = states[: -self._num_constants]
+
+                states = (
+                    states[0] if len(states) == 1 and is_tf_rnn_cell else states
+                )
+
+                # VELE CHANGES AND ADDITIONS --------------------------------------------
+                rnn_pre_act, output, new_states = cell_call_fn(
+                    inputs, states, constants=constants, **kwargs
+                )
+                # if rnn_pre_act is not None:
+                    # no_acc_reg_loss = 0.0001 * tf.reduce_sum(tf.square(no_acc_reg_hat_fn(rnn_pre_act, k=2**self.no_acc_reg_bits, a=1)))
+                    # losses_var.append(no_acc_reg_loss)
+                    # self.add_loss(0.0001 * tf.reduce_sum(tf.square(no_acc_reg_hat_fn(rnn_pre_act, k=2**self.no_acc_reg_bits, a=1))))
+                    # self.add_loss(rnn_pre_act)
+                # END OF VELE CHANGES AND ADDITIONS --------------------------------------
+
+                if not tf.nest.is_nested(new_states):
+                    new_states = [new_states]
+                return (rnn_pre_act, output, new_states), new_states
+
+        else:
+
+            def step(inputs, states):
+                states = (
+                    states[0] if len(states) == 1 and is_tf_rnn_cell else states
+                )
+
+                # VELE CHANGES AND ADDITIONS --------------------------------------------
+                rnn_pre_act, output, new_states = cell_call_fn(inputs, states, **kwargs)
+                # if rnn_pre_act is not None:
+                    # no_acc_reg_loss = 0.0001 * tf.reduce_sum(tf.square(no_acc_reg_hat_fn(rnn_pre_act, k=2**self.no_acc_reg_bits, a=1)))
+                    # losses_var.append(no_acc_reg_loss)
+                    # self.add_loss(0.0001 * tf.reduce_sum(tf.square(no_acc_reg_hat_fn(rnn_pre_act, k=2**self.no_acc_reg_bits, a=1))))
+                    # self.add_loss(rnn_pre_act)
+                # END OF VELE CHANGES AND ADDITIONS --------------------------------------
+
+                if not tf.nest.is_nested(new_states):
+                    new_states = [new_states]
+                return (rnn_pre_act, output, new_states), new_states
+
+        _, states = backend.rnn(
+            step,
+            inputs,
+            initial_state,
+            constants=constants,
+            go_backwards=self.go_backwards,
+            mask=mask,
+            unroll=self.unroll,
+            input_length=row_lengths if row_lengths is not None else timesteps,
+            time_major=self.time_major,
+            zero_output_for_mask=self.zero_output_for_mask,
+            return_all_outputs=self.return_sequences,
+        )
+
+        preactivation, outputs, states = zip(*states)
+
+       
+        self.add_loss(tf.reduce_mean(preactivation))
+
+        if self.stateful:
+            updates = [
+                tf.compat.v1.assign(
+                    self_state, tf.cast(state, self_state.dtype)
+                )
+                for self_state, state in zip(
+                    tf.nest.flatten(self.states), tf.nest.flatten(states)
+                )
+            ]
+            self.add_update(updates)
+
+        if self.return_sequences:
+            output = backend.maybe_convert_to_ragged(
+                is_ragged_input,
+                outputs,
+                row_lengths,
+                go_backwards=self.go_backwards,
+            )
+        # else:
+            # output = last_output
+
+        if self.return_state:
+            if not isinstance(states, (list, tuple)):
+                states = [states]
+            else:
+                states = list(states)
+            return generic_utils.to_list(output) + states
+        else:
+            return output
+    """
 
     def get_quantizers(self):
         return self.cell.quantizers
@@ -310,7 +471,7 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
     """
     def __init__(self,
                 units,
-                activation='quantized_tanh',
+                activation=None,
                 use_bias=False,
                 kernel_initializer='glorot_uniform',
                 recurrent_initializer='orthogonal',
@@ -386,7 +547,7 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
         self.no_acc_reg_lm = no_acc_reg_lm
         self.no_acc_reg_bits = no_acc_reg_bits
         if add_no_acc_reg:
-            self.no_acc_reg = NoAccRegularizerV2(lm=no_acc_reg_lm, k=2**no_acc_reg_bits, name=kwargs["name"])
+            self.no_acc_reg = NoAccRegularizerV3(lm=no_acc_reg_lm, k=2**no_acc_reg_bits, name=kwargs["name"])
 
         # Gradient scale
         self.s = s
@@ -453,7 +614,7 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
             )
 
         self.wx = self.add_weight(
-            name="wx",
+            name="wx_abs",
             shape=[self.units],
             dtype=self.kernel.dtype,
             initializer="zeros",
@@ -461,7 +622,15 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
         )
 
         self.wh = self.add_weight(
-            name="wh",
+            name="wh_abs",
+            shape=[self.units],
+            dtype=self.kernel.dtype,
+            initializer="zeros",
+            trainable=False
+        )
+
+        self.wxpluswh = self.add_weight(
+            name="wxpluswh_abs",
             shape=[self.units],
             dtype=self.kernel.dtype,
             initializer="zeros",
@@ -600,8 +769,8 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
         h_2 = K.dot(quantized_prev_output, quantized_recurrent)
 
         # Update stats
-        self.wx.assign(0.99*self.wx + 0.01*tf.reduce_mean(h, axis=0))
-        self.wh.assign(0.99*self.wh + 0.01*tf.reduce_mean(h_2, axis=0))
+        self.wx.assign(0.90*self.wx + 0.10*tf.reduce_mean(tf.abs(h), axis=0))
+        self.wh.assign(0.90*self.wh + 0.10*tf.reduce_mean(tf.abs(h_2), axis=0))
 
         # Compute norm if applicable
         h_norm = h
@@ -623,6 +792,9 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
         # Division is to control the gradient but output is h_norm + h_2_norm
         s = self.s # 1000 worked for quant
         output = h_norm/s + h_2_norm/s + tf.stop_gradient(-h_norm/s - h_2_norm/s + h_norm + h_2_norm)
+
+        # Log stats
+        self.wxpluswh.assign(0.90*self.wxpluswh + 0.10*tf.reduce_mean(tf.abs(h_norm + h_2_norm), axis=0))
 
         # Add bias if applicable 
         if self.bias is not None:
@@ -662,6 +834,9 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
             # No acc regularizer
             if self.no_acc_reg is not None:
                 output = self.no_acc_reg(output)
+                # self.add_loss(loss)
+                # self.add_metric(accuracy, name="nar/"+self.name)
+                # 0.0001 * tf.reduce_sum(tf.square(no_acc_reg_hat_fn(output, k=2**self.no_acc_reg_bits, a=1)))
             # Add distribution loss if applicable
             if self.dist_loss is not None:
                 output = self.dist_loss(output)
@@ -720,7 +895,7 @@ class QDenseWithNorm(QDense):
         self.no_acc_reg_lm = no_acc_reg_lm
         self.no_acc_reg_bits = no_acc_reg_bits
         if add_no_acc_reg:
-            self.no_acc_reg = NoAccRegularizerV2(lm=no_acc_reg_lm, k=2**no_acc_reg_bits, name=kwargs["name"])
+            self.no_acc_reg = NoAccRegularizerV3(lm=no_acc_reg_lm, k=2**no_acc_reg_bits, name=kwargs["name"])
 
         # Gradient scale
         self.s = s
@@ -804,15 +979,25 @@ class QDenseWithNorm(QDense):
             )
 
         self.wx = self.add_weight(
-            name="wx",
+            name="wx_abs",
             shape=[self.units],
             dtype=self.kernel.dtype,
             initializer="zeros",
             trainable=False
         )
 
+        wx_shp = input_shape.as_list()
+        wx_shp[0] = 64 
+        wx_shp[-1] = self.units
+        self.wx_abs_full = tf.Variable(
+            initial_value=tf.zeros(shape=wx_shp, dtype=tf.float32),
+            name="wx_abs_f",
+            trainable=False,
+            validate_shape=False,
+        )
+
         self.x_input = self.add_weight(
-            name="x",
+            name="x_abs",
             shape=[input_shape[-1]],
             dtype=self.kernel.dtype,
             initializer="zeros",
@@ -823,7 +1008,7 @@ class QDenseWithNorm(QDense):
     def call(self, inputs):
         # Write input stats (mainly for SA mult)
         reduce_dims = tf.range(0, tf.rank(inputs)-1)
-        self.x_input.assign(0.99*self.x_input + 0.01*tf.reduce_mean(inputs, axis=reduce_dims)) 
+        self.x_input.assign(0.9*self.x_input + 0.1*tf.reduce_mean(tf.abs(inputs), axis=reduce_dims)) 
         
         # Fold frozen BN into weights
         folded_kernel = self.kernel
@@ -863,7 +1048,8 @@ class QDenseWithNorm(QDense):
 
         # Update stats
         reduce_dims = tf.range(0, tf.rank(h)-1)
-        self.wx.assign(0.99*self.wx + 0.01*tf.reduce_mean(h, axis=reduce_dims)) 
+        self.wx.assign(0.9*self.wx + 0.1*tf.reduce_mean(tf.abs(h), axis=reduce_dims)) 
+        self.wx_abs_full.assign(0.9*self.wx_abs_full + 0.1*tf.abs(h))
         
         output = h
         # Add bias if using bias
@@ -880,7 +1066,7 @@ class QDenseWithNorm(QDense):
             else:
                 quantized_bias = folded_bias
 
-            quantized_bias = quantized_bias + tf.stop_gradient(-quantized_bias + 10000*quantized_bias)
+            # quantized_bias = quantized_bias + tf.stop_gradient(-quantized_bias + 10000*quantized_bias)
             
             # Add bias to output (Wx + b)
             output = tf.keras.backend.bias_add(output, quantized_bias,
@@ -913,6 +1099,8 @@ class QDenseWithNorm(QDense):
             # No acc regularizer
             if self.no_acc_reg is not None:
                 output = self.no_acc_reg(output)
+                # self.add_loss(loss)
+                # self.add_metric(accuracy, name="nar/"+self.name)
             # Add distribution loss
             if self.dist_loss is not None:
                 output = self.dist_loss(output)
@@ -1123,15 +1311,17 @@ class GeneralActivation(tf.keras.layers.Layer):
         
         if add_dist_loss:
             self.dist_loss = DistributionLossLayer() 
-        """
-        self.alpha = self.add_weight(
-            name=name+"/alpha", 
-            shape=[], 
-            dtype=tf.float32, 
-            initializer=tf.keras.initializers.constant(self.alpha_init), 
-            regularizer=self.regularizer,
-            trainable=True,
-        )
+
+        # self.alpha = self.add_weight(
+        #     name=name+"/alpha", 
+        #     shape=[], 
+        #     dtype=tf.float32, 
+        #     initializer=tf.keras.initializers.constant(self.alpha_init), 
+        #     regularizer=self.regularizer,
+        #     trainable=True,
+        # )
+
+
         self.inp_moving_mean = self.add_weight(
             name=name+"/inp_moving_mean", 
             shape=[], 
@@ -1160,7 +1350,6 @@ class GeneralActivation(tf.keras.layers.Layer):
             initializer=tf.keras.initializers.constant(0), 
             trainable=False,
         )
-        """
         
         # Get normalizer
         if self.normalizer == "batch_norm":
@@ -1188,7 +1377,7 @@ class GeneralActivation(tf.keras.layers.Layer):
         if self.norm:
             self.norm.build(input_shape)
         
-        new_shape = [128, input_shape[-1]]
+        # new_shape = [512, input_shape[-1]]
 
         # Build shape dependent stats
         # self.input_dist = self.add_weight(
@@ -1239,10 +1428,15 @@ class GeneralActivation(tf.keras.layers.Layer):
         #     outputs_for_stats = tf.reduce_mean(outputs_for_stats, 1)
 
         # # Calculate input stats
-        # self.input_dist.assign(0.01 * inputs_for_stats + 0.99 * self.input_dist)
+        # self.input_dist.assign(0.1 * inputs_for_stats + 0.9 * self.input_dist)
         
         # # Calculate output stats
-        # self.output_dist.assign(0.01 * outputs_for_stats + 0.99 * self.output_dist)
+        # self.output_dist.assign(0.1 * outputs_for_stats + 0.9 * self.output_dist)
+
+        self.inp_moving_mean.assign(0.9*self.inp_moving_mean + 0.1*tf.reduce_mean(inputs))
+        self.inp_moving_std.assign(0.9*self.inp_moving_std + 0.1*tf.math.reduce_std(inputs))
+        self.out_moving_mean.assign(0.9*self.out_moving_mean + 0.1*tf.reduce_mean(out))
+        self.out_moving_std.assign(0.9*self.out_moving_std + 0.1*tf.math.reduce_std(out))
 
         return out
 
@@ -1465,7 +1659,7 @@ class NoAccRegularizerV1(tf.keras.layers.Layer):
   def get_config(self):
     return {"lm": float(self.lm), "k": float(self.k), "a": float(self.a), "b": float(self.b), "g_0": float(self.g_0)}
 
-@tf.function
+# @tf.function
 def no_acc_reg_hat_fn(x, k, a):
     t_x = 1/k*(tf.abs(x)-(3/4*k-1/2))
     mod = tf.math.mod(t_x, 1)
@@ -1473,7 +1667,7 @@ def no_acc_reg_hat_fn(x, k, a):
     out = 2*abs-1
     return a*tf.nn.relu(out)
 
-@tf.function
+# @tf.function
 def no_acc_reg_hat_metric_fn(x, k, a):
     """
     A function that calculates the ratio between values in correct regions and all values.
@@ -1511,14 +1705,88 @@ class NoAccRegularizerV2(tf.keras.layers.Layer):
     self.lm = lm
     self.k = k
     self.a = a
-    self.no_acc_metric = tf.keras.metrics.Mean(name='no_acc_metric/'+name)
+    self.no_acc_metric = tf.keras.metrics.Mean(name='nar/'+name)
 
   def __call__(self, x):
     loss = tf.square(no_acc_reg_hat_fn(x=x, k=self.k, a=self.a))
-    accuracy = no_acc_reg_hat_metric_fn(x, k=self.k, a=self.a)
+    loss = self.lm * tf.reduce_sum(loss)
 
-    self.add_loss(self.lm * tf.reduce_sum(loss))
-    self.add_metric(self.no_acc_metric(accuracy))
+    accuracy = no_acc_reg_hat_metric_fn(x, k=self.k, a=self.a)
+    accuracy = self.no_acc_metric(accuracy)
+
+    self.add_loss(loss)
+    self.add_metric(accuracy)
+
+    return x
+
+  def get_config(self):
+    return {'lm': float(self.lm), 'k': int(self.k), 'a': float(self.a)}
+
+def no_acc_reg_saw_fn(x, k, a):
+    t_x = tf.abs(x) + 0.5
+    mod = tf.math.mod(t_x, k)
+    out = mod - 0.5*k
+    return a*tf.nn.relu(out)
+
+def no_acc_reg_hat_fn_const_grad(x, k, a):
+    t_x = tf.abs(x) - (k-2)/4
+    mod = tf.math.mod(t_x, k)
+    out = mod - k/2
+    out = tf.abs(out)
+    out = k/4 - out
+    return a*tf.nn.relu(out)
+
+def no_acc_reg_hat_fn_no_zero(x, k, a):
+    def func(x, k, a):
+        t_x = tf.abs(x) - k/4
+        mod = tf.math.mod(t_x, k)
+        out = mod - k/2
+        out = tf.abs(out)
+        out = k/2 - out
+        return out
+    out = tf.where(tf.abs(x) <= k/4, 0*x, func(x, k, a))
+    return a*out
+
+def no_acc_reg_hat_fn_less_zero(x, k, a):
+    def func(x, k, a, num_zeros):
+        t_x = tf.abs(x) - (k-2)/4
+        mod = tf.math.mod(t_x, k)
+        out = mod - k/2
+        out = tf.abs(out)
+        out = k/4 - out + num_zeros
+        return a*tf.nn.relu(out)
+    num_zeros = k/8
+    out = tf.where(tf.abs(x) <= num_zeros, 0*x, func(x, k, a, num_zeros))
+    return a*out
+
+class NoAccRegularizerV3(tf.keras.layers.Layer):
+  """
+  This regularizer penalizes results of matrix multiplications that lie in incorrectly-signed regions of the domain
+  after a modulo operation is applied.
+
+  Ex. if K (modulus) = 8, then a result of Wx_i mod 8 = 4 mod 8 = -4 instead of +4 which can lead a 
+  sign activation function outputting wrong -1 instead of +1. This is important for binary/ternary
+  networks.
+
+  This specific version implements a saw function (ex. __/__/__). This is supposed to provide a constant
+  derivative in the incorrect regions to move them to the correct regions.
+  """
+  def __init__(self, lm=1e-3, k=2**8, a=1., name=""):
+    super(NoAccRegularizerV3, self).__init__()
+    self.lm = lm
+    self.k = k
+    self.a = a
+    self.no_acc_metric = tf.keras.metrics.Mean(name='nar/'+name)
+
+  def __call__(self, x):
+    loss = no_acc_reg_hat_fn_less_zero(x=x, k=self.k, a=self.a)
+    loss = self.lm * tf.reduce_sum(loss)
+
+    accuracy = no_acc_reg_hat_metric_fn(x, k=self.k, a=self.a)
+    accuracy = self.no_acc_metric(accuracy)
+
+    self.add_loss(loss)
+    self.add_metric(accuracy)
 
     return x
 
@@ -1840,7 +2108,11 @@ class TimeReduction(tf.keras.layers.Layer):
         })
         return config
 
-def QSelfAttentionMechanismFn(num_hops, hidden_size, inputs, kernel_regularizer, bias_regularizer, kernel_quantizer, bias_quantizer, kernel_initializer, bias_initializer, activation, use_bias, norm, fold_batch_norm, add_dist_loss, soft_thresh_tern, learned_thresh, add_no_acc_reg, no_acc_reg_lm, no_acc_reg_bits, s, name):
+def QSelfAttentionMechanismFn(
+    num_hops, hidden_size, inputs, kernel_regularizer, bias_regularizer, kernel_quantizer, 
+    bias_quantizer, kernel_initializer, bias_initializer, activation, use_bias, norm, 
+    fold_batch_norm, add_dist_loss, soft_thresh_tern, learned_thresh, add_no_acc_reg, 
+    no_acc_reg_lm, no_acc_reg_bits, s, layer_options, name):
 
     shp = K.int_shape(inputs)
     T = shp[1]
@@ -1854,7 +2126,10 @@ def QSelfAttentionMechanismFn(num_hops, hidden_size, inputs, kernel_regularizer,
         use_bias=use_bias, 
         kernel_regularizer=kernel_regularizer, # if kernel_regularizer else AdaptiveBinaryTernaryRegularizer(lm=1e-1, name=name+"_QDENSE_0"),
         bias_regularizer=bias_regularizer,
-        kernel_quantizer=LearnedThresholdTernary(scale=1.0, threshold=0.02, name=name+"_QDENSE_0") if learned_thresh else kernel_quantizer, # 0.0032
+        kernel_quantizer=LearnedThresholdTernary(
+            scale=1.0, 
+            threshold=layer_options[name+"_QDENSE_0"]["tern_quant_thresh"], 
+            name=name+"_QDENSE_0") if learned_thresh else kernel_quantizer, # 0.0032
         bias_quantizer=bias_quantizer,
         kernel_initializer=kernel_initializer,
         norm=norm,
@@ -1873,7 +2148,10 @@ def QSelfAttentionMechanismFn(num_hops, hidden_size, inputs, kernel_regularizer,
         use_bias=use_bias, 
         kernel_regularizer=kernel_regularizer, # if kernel_regularizer else AdaptiveBinaryTernaryRegularizer(lm=1e-1, name=name+"_QDENSE_1"),
         bias_regularizer=bias_regularizer,
-        kernel_quantizer=LearnedThresholdTernary(scale=1.0, threshold=0.02, name=name+"_QDENSE_1") if learned_thresh else kernel_quantizer, # 0.00055
+        kernel_quantizer=LearnedThresholdTernary(
+            scale=1.0, 
+            threshold=layer_options[name+"_QDENSE_1"]["tern_quant_thresh"],
+            name=name+"_QDENSE_1") if learned_thresh else kernel_quantizer, # 0.00055
         bias_quantizer=bias_quantizer,
         kernel_initializer=kernel_initializer,
         norm=norm,
@@ -1893,16 +2171,22 @@ def QSelfAttentionMechanismFn(num_hops, hidden_size, inputs, kernel_regularizer,
         name=name+"_TRANSPOSE")(sa_matmul2)
     
     # matmul3
-    sa_matmul3 = tf.keras.layers.Dot(axes=[2,1], name=name+"_DOT")([sa_trans, inputs])
+    sa_matmul3 = tf.keras.layers.Dot(
+        axes=[2,1], 
+        name=name+"_DOT", 
+    )([sa_trans, inputs])
 
     # ADDED THIS TO SEE HOW IT WOULD WORK
-    if add_no_acc_reg:
-        sa_matmul3 = NoAccRegularizerV2(lm=no_acc_reg_lm, k=2**no_acc_reg_bits, name=name+"_DOT")(sa_matmul3)
-    sa_matmul3 = GeneralActivation(activation=activation, name=name+"_act_after_dot")(sa_matmul3)
+    # if add_no_acc_reg:
+        # sa_matmul3 = NoAccRegularizerV2(lm=no_acc_reg_lm, k=2**no_acc_reg_bits, name=name+"_DOT_NAR")(sa_matmul3)
+    # sa_matmul3 = GeneralActivation(activation=activation, name=name+"_act_after_dot")(sa_matmul3)
 
     # sa_avg = tf.keras.layers.GlobalAveragePooling1D(name=name+"_TAP")(sa_matmul3)
 
-    sa_output = tf.keras.layers.Reshape([n_h*n_k], name=name+"_OUTPUT")(sa_matmul3)
+    sa_output = tf.keras.layers.Reshape(
+        [n_h*n_k], 
+        name=name+"_OUTPUT",
+    )(sa_matmul3)
 
     # bias_correction = tf.Variable(
     #     initial_value="zeros",
@@ -2008,7 +2292,7 @@ class SimpleRNNCellWithProjection(tf.keras.layers.SimpleRNNCell):
         return super().get_config().update({"projection_units": self.projection_units})
 
  
-class CustomModelWithGradHistograms(tf.keras.models.Model):
+class ModelWithGradInfo(tf.keras.models.Model):
     def train_step(self, data):
         """The logic for one training step.
 
@@ -2042,8 +2326,62 @@ class CustomModelWithGradHistograms(tf.keras.models.Model):
             loss = self.compute_loss(x, y, y_pred, sample_weight)
         self._validate_target_and_loss(y, loss)
         # Run backwards pass.
-        self.optimizer.minimize(loss, self.trainable_variables, tape=tape)
-        return self.compute_metrics(x, y, y_pred, sample_weight)
+        grads = tape.gradient(loss, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(grads, self.trainable_variables))
+        # self.optimizer.minimize(loss, self.trainable_variables, tape=tape)
+
+        output = self.compute_metrics(x, y, y_pred, sample_weight)
+
+        # Calc additional grad stats
+        # REG GRADS
+        # reg_grads = tape.gradient(tf.add_n(self.losses), self.trainable_variables)
+        # reg_grad_norms_names = ["grad_norm/reg_"+g.name for g in self.trainable_variables]
+        # reg_grad_squares = [tf.reduce_sum(tf.square(g)) for g in reg_grads]
+        # reg_grad_norms = [tf.sqrt(g) for g in reg_grad_squares]
+        # reg_global_grad_norm = tf.sqrt(tf.add_n(reg_grad_squares))
+        # reg_names_to_norms = dict(zip(reg_grad_norms_names, reg_grad_norms))
+        
+        # output["global_reg_grad_norm"] =  reg_global_grad_norm
+        # output.update(reg_names_to_norms)
+
+        # TOTAL GRADS
+        grad_norms_names = ["grad_norm/"+g.name for g in self.trainable_variables]
+        # grad_avgs_names = ["grad_avg/"+g.name for g in self.trainable_variables]
+        grad_squares = [tf.reduce_sum(tf.square(g)) for g in grads]
+        # grad_avgs = [tf.reduce_mean(g) for g in grads]
+        grad_norms = [tf.sqrt(g) for g in grad_squares]
+
+        global_grad_norm = tf.sqrt(tf.add_n(grad_squares))
+        names_to_norms = dict(zip(grad_norms_names, grad_norms))
+        # names_to_avgs = dict(zip(grad_avgs_names, grad_avgs))
+
+        # Update output dict
+        output["global_grad_norm"] =  global_grad_norm
+        output.update(names_to_norms)
+        # output.update(names_to_avgs)
+
+        return output
+
+def custom_loader(model, checkpoint_path):
+    # Load the weights from the checkpoint
+    checkpoint = tf.train.Checkpoint(model=model)
+    checkpoint.restore(checkpoint_path).expect_partial()
+
+    # Get a list of all model's variables
+    model_vars = model.variables
+
+    # Iterate over the variables
+    for var in model_vars:
+        # Get the name of the current variable
+        var_name = var.name
+
+        # Skip the loading of certain variables based on their name
+        if "wx" in var_name:
+            continue
+
+        # Load the value of the variable
+        value = checkpoint.get_variable_value(var_name)
+        var.assign(value)
 
 """
 # class SelfAttentionMechanism(tf.keras.layers.Layer):

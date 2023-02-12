@@ -85,6 +85,8 @@ class QIRNN(tf.keras.layers.RNN):
         kernel_initializer='glorot_uniform',
         recurrent_initializer='orthogonal',
         bias_initializer=None,
+        dropout=0.,
+        recurrent_dropout=0.,
         kernel_norm=None,
         recurrent_norm=None,
         use_bias=False,
@@ -141,6 +143,8 @@ class QIRNN(tf.keras.layers.RNN):
                     kernel_quantizer=kernel_quantizer,
                     recurrent_quantizer=recurrent_quantizer,
                     bias_quantizer=bias_quantizer,
+                    dropout=dropout,
+                    recurrent_dropout=recurrent_dropout,
                     kernel_norm=self.kernel_norm,
                     recurrent_norm=self.recurrent_norm,
                     use_bias=use_bias,
@@ -547,7 +551,7 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
         self.no_acc_reg_lm = no_acc_reg_lm
         self.no_acc_reg_bits = no_acc_reg_bits
         if add_no_acc_reg:
-            self.no_acc_reg = NoAccRegularizerV3(lm=no_acc_reg_lm, k=2**no_acc_reg_bits, name=kwargs["name"])
+            self.no_acc_reg = NoAccRegularizerV2(lm=no_acc_reg_lm, k=2**no_acc_reg_bits, name=kwargs["name"])
 
         # Gradient scale
         self.s = s
@@ -629,9 +633,9 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
             trainable=False
         )
 
-        self.wxpluswh = self.add_weight(
-            name="wxpluswh_abs",
-            shape=[self.units],
+        self.wx_wh = self.add_weight(
+            name="wx_wh_f",
+            shape=[512, self.units],
             dtype=self.kernel.dtype,
             initializer="zeros",
             trainable=False
@@ -741,8 +745,6 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
             h = K.dot(inputs * dp_mask, quantized_kernel)
         else:
             h = K.dot(inputs, quantized_kernel)
-        if rec_dp_mask is not None:
-            quantized_prev_output = quantized_prev_output * rec_dp_mask
 
         # Quantize recurrent kernel
         if self.recurrent_quantizer:
@@ -765,8 +767,11 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
                 quantized_recurrent -= quantized_recurrent_2
                 self.combined_recurrent_kernel.assign(quantized_recurrent)
 
-        # Calculate h_2
-        h_2 = K.dot(quantized_prev_output, quantized_recurrent)
+        # Add dropout mask if not none
+        if rec_dp_mask is not None:
+            h_2 = K.dot(quantized_prev_output * rec_dp_mask, quantized_recurrent)
+        else:
+            h_2 = K.dot(quantized_prev_output, quantized_recurrent)
 
         # Update stats
         self.wx.assign(0.90*self.wx + 0.10*tf.reduce_mean(tf.abs(h), axis=0))
@@ -794,7 +799,7 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
         output = h_norm/s + h_2_norm/s + tf.stop_gradient(-h_norm/s - h_2_norm/s + h_norm + h_2_norm)
 
         # Log stats
-        self.wxpluswh.assign(0.90*self.wxpluswh + 0.10*tf.reduce_mean(tf.abs(h_norm + h_2_norm), axis=0))
+        self.wx_wh.assign(0.90*self.wx_wh + 0.10*(h_norm + h_2_norm))
 
         # Add bias if applicable 
         if self.bias is not None:
@@ -895,7 +900,7 @@ class QDenseWithNorm(QDense):
         self.no_acc_reg_lm = no_acc_reg_lm
         self.no_acc_reg_bits = no_acc_reg_bits
         if add_no_acc_reg:
-            self.no_acc_reg = NoAccRegularizerV3(lm=no_acc_reg_lm, k=2**no_acc_reg_bits, name=kwargs["name"])
+            self.no_acc_reg = NoAccRegularizerV2(lm=no_acc_reg_lm, k=2**no_acc_reg_bits, name=kwargs["name"])
 
         # Gradient scale
         self.s = s
@@ -987,11 +992,11 @@ class QDenseWithNorm(QDense):
         )
 
         wx_shp = input_shape.as_list()
-        wx_shp[0] = 64 
+        wx_shp[0] = 512 
         wx_shp[-1] = self.units
-        self.wx_abs_full = tf.Variable(
+        self.wx_full = tf.Variable(
             initial_value=tf.zeros(shape=wx_shp, dtype=tf.float32),
-            name="wx_abs_f",
+            name="wx_f",
             trainable=False,
             validate_shape=False,
         )
@@ -1003,7 +1008,6 @@ class QDenseWithNorm(QDense):
             initializer="zeros",
             trainable=False
         )
-
     
     def call(self, inputs):
         # Write input stats (mainly for SA mult)
@@ -1049,7 +1053,7 @@ class QDenseWithNorm(QDense):
         # Update stats
         reduce_dims = tf.range(0, tf.rank(h)-1)
         self.wx.assign(0.9*self.wx + 0.1*tf.reduce_mean(tf.abs(h), axis=reduce_dims)) 
-        self.wx_abs_full.assign(0.9*self.wx_abs_full + 0.1*tf.abs(h))
+        self.wx_full.assign(0.9*self.wx_full + 0.1*h)
         
         output = h
         # Add bias if using bias
@@ -1725,7 +1729,13 @@ class NoAccRegularizerV2(tf.keras.layers.Layer):
 def no_acc_reg_saw_fn(x, k, a):
     t_x = tf.abs(x) + 0.5
     mod = tf.math.mod(t_x, k)
-    out = mod - 0.5*k
+    out = 0.5*k - mod
+    return a*tf.nn.relu(out)
+
+def no_acc_reg_inverse_saw_fn(x, k, a):
+    t_x = tf.abs(x) + 0.5 + k/2
+    mod = tf.math.mod(t_x, k)
+    out = 1 - 2/k*mod
     return a*tf.nn.relu(out)
 
 def no_acc_reg_hat_fn_const_grad(x, k, a):
@@ -1779,7 +1789,7 @@ class NoAccRegularizerV3(tf.keras.layers.Layer):
     self.no_acc_metric = tf.keras.metrics.Mean(name='nar/'+name)
 
   def __call__(self, x):
-    loss = no_acc_reg_hat_fn_less_zero(x=x, k=self.k, a=self.a)
+    loss = tf.square(no_acc_reg_inverse_saw_fn(x=x, k=self.k, a=self.a))
     loss = self.lm * tf.reduce_sum(loss)
 
     accuracy = no_acc_reg_hat_metric_fn(x, k=self.k, a=self.a)
@@ -2112,13 +2122,15 @@ def QSelfAttentionMechanismFn(
     num_hops, hidden_size, inputs, kernel_regularizer, bias_regularizer, kernel_quantizer, 
     bias_quantizer, kernel_initializer, bias_initializer, activation, use_bias, norm, 
     fold_batch_norm, add_dist_loss, soft_thresh_tern, learned_thresh, add_no_acc_reg, 
-    no_acc_reg_lm, no_acc_reg_bits, s, layer_options, name):
+    no_acc_reg_lm, no_acc_reg_bits, s, layer_options, dropout, name):
 
     shp = K.int_shape(inputs)
     T = shp[1]
     n_h = shp[2]
     n_c = hidden_size
     n_k = num_hops
+
+    inputs = tf.keras.layers.Dropout(dropout)(inputs) if dropout else inputs
 
     #matmul1
     sa_matmul1 = QDenseWithNorm(
@@ -2142,6 +2154,8 @@ def QSelfAttentionMechanismFn(
         s=s,
         name=name+"_QDENSE_0")(inputs)
 
+    sa_matmul1 = tf.keras.layers.Dropout(dropout)(sa_matmul1) if dropout else sa_matmul1
+
     # matmul2
     sa_matmul2 = QDenseWithNorm(
         n_k, activation=GeneralActivation(activation=activation, name=name+"_QDENSE_1"),  
@@ -2151,6 +2165,7 @@ def QSelfAttentionMechanismFn(
         kernel_quantizer=LearnedThresholdTernary(
             scale=1.0, 
             threshold=layer_options[name+"_QDENSE_1"]["tern_quant_thresh"],
+            mean=0.0,
             name=name+"_QDENSE_1") if learned_thresh else kernel_quantizer, # 0.00055
         bias_quantizer=bias_quantizer,
         kernel_initializer=kernel_initializer,

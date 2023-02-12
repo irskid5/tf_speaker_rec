@@ -65,7 +65,7 @@ def configure_environment(gpu_names, fp16_run=False, multi_strategy=False):
             devices=gpu_names)
         num_workers = len(gpus)
     else:
-        device = gpus[3].name[len('/physical_device:'):]
+        device = gpus[0].name[len('/physical_device:'):]
         print('Running single gpu: {}'.format(device))
         strategy = tf.distribute.OneDeviceStrategy(
             device=device)
@@ -100,20 +100,20 @@ def augment(image, label):
 
 
 AUTOTUNE = tf.data.experimental.AUTOTUNE
-BATCH_SIZE = 64*num_workers
+BATCH_SIZE = 512*num_workers
 
 # Setup for train dataset
 ds_train = ds_train.map(normalize_img, num_parallel_calls=AUTOTUNE)
-# ds_train = ds_train.cache()
+ds_train = ds_train.cache()
 ds_train = ds_train.shuffle(ds_info.splits["train"].num_examples)
 ds_train = ds_train.map(augment)
-ds_train = ds_train.batch(BATCH_SIZE)
+ds_train = ds_train.batch(BATCH_SIZE, drop_remainder=True)
 ds_train = ds_train.prefetch(AUTOTUNE)
 
 # Setup for test Dataset
 ds_test = ds_test.map(normalize_img, num_parallel_calls=AUTOTUNE)
-# ds_test = ds_test.cache()
-ds_test = ds_test.batch(BATCH_SIZE)
+ds_test = ds_test.cache()
+ds_test = ds_test.batch(BATCH_SIZE, drop_remainder=True)
 ds_test = ds_test.prefetch(AUTOTUNE)
 
 # Specify checkpoint dir
@@ -167,14 +167,19 @@ with strategy.scope():
     for layer in model.layers:
         if len(layer.trainable_weights) > 0:
             all_weights = tf.concat([tf.reshape(x, shape=[-1]) for x in layer.trainable_weights], axis=-1)
-            tf.print("STD of all weights in ", layer.name, 1.0*tf.math.reduce_std(tf.abs(all_weights)))
+            tf.print("std   W  in ", layer.name, 1.0*tf.math.reduce_std(all_weights))
+            tf.print("mean  W  in ", layer.name, 1.0*tf.math.reduce_mean(all_weights))
+            tf.print("mean |W| in ", layer.name, 1.0*tf.math.reduce_mean(tf.abs(all_weights)))
+            tf.print("")
     all_weights = tf.concat([tf.reshape(x, shape=[-1]) for x in model.trainable_weights], axis=-1)
-    tf.print("STD of all weights in ", model.name, 1.0*tf.math.reduce_std(tf.abs(all_weights)))
+    tf.print("std   W  all weights in ", model.name, 1.0*tf.math.reduce_std(all_weights))
+    tf.print("mean  W  all weights in ", model.name, 1.0*tf.math.reduce_mean(all_weights))
+    tf.print("mean |W| all weights in ", model.name, 1.0*tf.math.reduce_mean(tf.abs(all_weights)))
 
     model.compile(
         # optimizer=larq.optimizers.Bop(threshold=1e-8, gamma=1e-4), # first ever binary optimizer (flips weights based on grads)
-        optimizer=tf.keras.optimizers.Adam(),
-        loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+        optimizer=tf.keras.optimizers.Adam(clipnorm=1),
+        loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=False),
         metrics=["accuracy"],
     )
 
@@ -187,7 +192,7 @@ tb_callback = tf.keras.callbacks.TensorBoard(
 
 # Add a lr decay callback
 lr_callback = tf.keras.callbacks.LearningRateScheduler(
-    tf.keras.optimizers.schedules.CosineDecay(1e-4, 500, alpha=0.1),
+    tf.keras.optimizers.schedules.CosineDecay(1e-4, 100, alpha=0.1), #500
     verbose=0,
 )
 

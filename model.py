@@ -269,10 +269,10 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     irnn_identity_scale = hparams[HP_IRNN_IDENTITY_SCALE.name]
 
     # Regularizers (None for quantization I believe)
-    kernel_regularizer = None # tf.keras.regularizers.L2(0.0001) # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001)
-    recurrent_regularizer = None # tf.keras.regularizers.L2(0.0001) # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # BinaryEuclideanRegularizer(l2=1e-6) #TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4)
+    kernel_regularizer = None # tf.keras.regularizers.L2(1e-4) # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001)
+    recurrent_regularizer = None # tf.keras.regularizers.L2(1e-4) # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # BinaryEuclideanRegularizer(l2=1e-6) #TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4)
     bias_regularizer = None
-    activation_regularizer = None # tf.keras.regularizers.L2(l2=0.0001)
+    # activation_regularizer = None # tf.keras.regularizers.L2(l2=0.0001)
 
     # Quantization functions (General)
     kernel_quantizer = None # stochastic_ternary(alpha=1.0, threshold=0.0126744006) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.01) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.7*tf.reduce_mean(tf.abs(x))) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
@@ -283,6 +283,7 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     use_bias = False
     add_dist_loss = False
     norm = None
+    dropout = None
     fold_batch_norm = False
     soft_thresh_tern = False
     learned_thresh = True
@@ -311,7 +312,7 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     dense_kernel_initializer = tf.keras.initializers.VarianceScaling(scale=1.0 if soft_thresh_tern else 2.0, mode="fan_in", distribution="truncated_normal", seed=SEED) # "he_normal" is default 
     # bias_initializer = "ones"
 
-    g = 1.6
+    g = 1.7
     # 1.3, 1.4, 1.5, 2.0, all 512
     # 1.2 was good
 
@@ -322,16 +323,52 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     #     "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.0103797782, "g": g,}, 
     #     "DENSE_0": {"tern_quant_thresh": 2*0.00454145391, "g": 2,}, 
     #     "DENSE_OUT": {"tern_quant_thresh": g*0.0178621784, "g": g,}
-    # } # std for 20221125-112620 init
+    # } # std(|w|) for 20221125-112620 init
+
+    # layer_options = {
+    #     "IRNN_0": {"tern_quant_thresh": g*0.010765957, "g": g,}, 
+    #     "IRNN_1": {"tern_quant_thresh": g*0.009046354, "g": g,}, 
+    #     "SA_0_QDENSE_0": {"tern_quant_thresh": g*0.002621475, "g": g,}, 
+    #     "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.003543641, "g": g,}, 
+    #     "DENSE_0": {"tern_quant_thresh": g*0.005629966, "g": g,}, 
+    #     "DENSE_OUT": {"tern_quant_thresh": g*0.025896339, "g": g,}
+    # } # mean(|w|) for 20221125-112620 init
+
+    # layer_options = {
+    #     "IRNN_0": {"tern_quant_thresh": g*0.011855823, "g": g,}, 
+    #     "IRNN_1": {"tern_quant_thresh": g*0.00814875215, "g": g,}, 
+    #     "SA_0_QDENSE_0": {"tern_quant_thresh": g*0.00517027825, "g": g,}, 
+    #     "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.00986352749, "g": g,}, 
+    #     "DENSE_0": {"tern_quant_thresh": g*0.00606995728, "g": g,}, 
+    #     "DENSE_OUT": {"tern_quant_thresh": g*0.0195200332, "g": g,}
+    # } # std(|w|) for 20230128-123500 init
+
+    # layer_options = {
+    #     "IRNN_0": {"tern_quant_thresh": g*0.016198909, "g": g,}, 
+    #     "IRNN_1": {"tern_quant_thresh": g*0.012490742, "g": g,}, 
+    #     "SA_0_QDENSE_0": {"tern_quant_thresh": g*0.006454604, "g": g,}, 
+    #     "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.010424445, "g": g,}, 
+    #     "DENSE_0": {"tern_quant_thresh": g*0.009838583, "g": g,}, 
+    #     "DENSE_OUT": {"tern_quant_thresh": g*0.03391825, "g": g,}
+    # } # std(w) for 20230128-123500 init
 
     layer_options = {
-        "IRNN_0": {"tern_quant_thresh": g*0.011855823, "g": g,}, 
-        "IRNN_1": {"tern_quant_thresh": g*0.00814875215, "g": g,}, 
-        "SA_0_QDENSE_0": {"tern_quant_thresh": g*0.00517027825, "g": g,}, 
-        "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.00986352749, "g": g,}, 
-        "DENSE_0": {"tern_quant_thresh": g*0.00606995728, "g": g,}, 
-        "DENSE_OUT": {"tern_quant_thresh": g*0.0195200332, "g": g,}
-    } # std for 20230128-123500 init
+        "IRNN_0": {"tern_quant_thresh": g*0.011038369, "g": g,}, 
+        "IRNN_1": {"tern_quant_thresh": g*0.009466604, "g": g,}, 
+        "SA_0_QDENSE_0": {"tern_quant_thresh": g*0.003863955, "g": g,}, 
+        "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.003373463, "g": g,}, 
+        "DENSE_0": {"tern_quant_thresh": g*0.007742954, "g": g,}, 
+        "DENSE_OUT": {"tern_quant_thresh": 0.7*0.027738357, "g": 0.7,}
+    } # mean(|w|) for 20230128-123500 init
+
+    # layer_options = {
+    #     "IRNN_0": {"tern_quant_thresh": g*0.000814461615, "g": g,}, 
+    #     "IRNN_1": {"tern_quant_thresh": g*0.00308605, "g": g,}, 
+    #     "SA_0_QDENSE_0": {"tern_quant_thresh": g*0.00120870152, "g": g,}, 
+    #     "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.00356123107, "g": g,}, 
+    #     "DENSE_0": {"tern_quant_thresh": g*0.00486144843, "g": g,}, 
+    #     "DENSE_OUT": {"tern_quant_thresh": 0.7*0.018041607, "g": 0.7,}
+    # } # mean(|w|) for 20230128-123500 init
 
     # Debug
     tf.print({
@@ -349,6 +386,7 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
         "use_bias": use_bias,
         "add_dist_loss": add_dist_loss,
         "norm": norm,
+        "dropout": dropout,
         "fold_batch_norm": fold_batch_norm,
         "soft_thresh_tern": soft_thresh_tern,
         "learned_thresh": learned_thresh,
@@ -417,6 +455,8 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
         bias_quantizer=bias_quantizer,
         kernel_initializer=rnn_kernel_initializer,
         recurrent_initializer=rnn_recurrent_initializer,
+        dropout=dropout if dropout else 0.,
+        recurrent_dropout=dropout if dropout else 0.,
         kernel_norm=norm,
         recurrent_norm=norm,
         activation=GeneralActivation(activation=activation_irnn, name="IRNN_0"), # don't make this global variable
@@ -451,6 +491,8 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
         bias_quantizer=bias_quantizer,
         kernel_initializer=rnn_kernel_initializer,
         recurrent_initializer=rnn_recurrent_initializer,
+        dropout=dropout if dropout else 0.,
+        recurrent_dropout=dropout if dropout else 0.,
         kernel_norm=norm,
         recurrent_norm=norm,
         activation=GeneralActivation(activation=activation_irnn, name="IRNN_1"),
@@ -486,9 +528,12 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
         add_no_acc_reg=add_no_acc_reg,
         no_acc_reg_lm=no_acc_reg_lm,
         no_acc_reg_bits=acc_precision,
+        dropout=dropout,
         s=1,
         layer_options=layer_options,
         name="SA_0")
+
+    sa_output = tf.keras.layers.Dropout(dropout)(sa_output) if dropout else sa_output
 
     # sa_output = tf.keras.layers.Lambda(lambda x: tf.debugging.check_numerics(x, message="Found NaN or Inf"), name="CHK_"+"SA_0_OUTPUT")(sa_output)
     output_proj = QDenseWithNorm(
@@ -507,11 +552,14 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
         fold_batch_norm=fold_batch_norm,
         add_dist_loss=add_dist_loss, # add_dist_loss, CHANGE BACK,
         soft_thresh_tern=soft_thresh_tern,
-        add_no_acc_reg=add_no_acc_reg,
+        add_no_acc_reg=True,
         no_acc_reg_lm=no_acc_reg_lm,
         no_acc_reg_bits=acc_precision,
         s=1,
         name="DENSE_0")(sa_output)
+
+    output_proj = tf.keras.layers.Dropout(dropout)(output_proj) if dropout else output_proj
+    
     # output_proj = tf.keras.layers.Lambda(lambda x: tf.debugging.check_numerics(x, message="Found NaN or Inf"), name="CHK_"+"DENSE_0")(output_proj)
     # Output logits layers
     output = QDenseWithNorm(

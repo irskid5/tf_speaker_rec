@@ -65,14 +65,16 @@ def binarize_tensor_with_threshold(x, theta=1, hparams=None):
     quantized = tf.where(tf.greater(quantized, theta), tf.ones_like(quantized), quantized)
     return quantized
 
-def ternarize_tensor_with_threshold(x, theta=1, hparams=None):
+def ternarize_tensor_with_threshold(x, theta=1, mean=0., hparams=None):
     """
     Ternary quantizer where 
-    x = -1 if x <= -threshold,
-    x = 0  if -threshold < x < threshold,
-    x = 1  if x >= threshold
+    x = -1 if x-mean <= -threshold,
+    x = 0  if -threshold < x-mean < threshold,
+    x = 1  if x-mean >= threshold.
+
+    Includes mean correction whici is 0 by default.
     """
-    q = K.cast(tf.abs(x) >= theta, K.floatx()) * tf.sign(x)
+    q = K.cast(tf.abs(x-mean) >= theta, K.floatx()) * tf.sign(x)
     # q = K.cast(tf.abs(x) >= theta, K.floatx()) * x
     return q
 
@@ -107,6 +109,7 @@ class LearnedThresholdTernary(BaseQuantizer):
         self, 
         scale=0.7, 
         threshold=None,
+        mean=0.0,
         qnoise_factor=1.0,
         var_name=None,
         use_ste=True,
@@ -117,6 +120,7 @@ class LearnedThresholdTernary(BaseQuantizer):
         super(LearnedThresholdTernary, self).__init__()
         self.bits = 2
         self.threshold = threshold
+        self.mean = mean
         # self.threshold = tf.Variable(
         #     initial_value=tf.constant(0, dtype=tf.float32) if threshold is None else threshold,
         #     trainable=False,
@@ -138,10 +142,12 @@ class LearnedThresholdTernary(BaseQuantizer):
             # self.threshold.assign(self.scale * t)
             self.initialized = True
         
-        xq = ternarize_tensor_with_threshold(x, theta=self.threshold)
+        xq = ternarize_tensor_with_threshold(x, theta=self.threshold, mean=self.mean)
 
         if self.use_ste:
             return x + tf.stop_gradient(self.qnoise_factor * (-x + xq))
+            # out = tf.math.tanh(x)
+            # return out + tf.stop_gradient(-out + xq)
         else:
             return (1 - self.qnoise_factor) * x + tf.stop_gradient(
                 self.qnoise_factor * xq)

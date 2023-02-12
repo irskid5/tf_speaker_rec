@@ -1005,7 +1005,7 @@ def qkeras_qat(_):
     # LARGER NETWORKS
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221117-163745/checkpoints/" # Original (x4) w/ SS(1), clipnorm=0.1, 33%
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221118-115744/checkpoints/" # ter input (x4) w/ SS(1), stochastic_ternary(t=0.25) quant, 2% so far but training
-    pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221120-134420/checkpoints/" # Original (all x3 except dense, hops) w/ tanh, ATSCH(5400, HP_NUM_SELF_ATT_UNITS)), default rnn init, 75%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221120-134420/checkpoints/" # Original (all x3 except dense, hops) w/ tanh, ATSCH(5400, HP_NUM_SELF_ATT_UNITS)), default rnn init, 75%
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221125-184845/checkpoints/" # Original (all x3 except dense, hops) w/ tanh, lr=1e-4, dist_loss(10, kd=1, all else 0), default rnn init, 77%
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221125-020548/checkpoints/" # Original (all x3 except dense, hops) w/ sign_with_tanh, lr=1e-4, clipnorm=1, dist_loss(10, kd=1, all else 0), 20221120-134420 init, 70%
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221121-152133/checkpoints/" # Original (all x3 except dense, hops) w/ sign_with_htan, ATSCH(5400, HP_NUM_SELF_ATT_UNITS)), 20221120-134420 init, 65%
@@ -1039,8 +1039,14 @@ def qkeras_qat(_):
 
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230127-100353/checkpoints/"
     
+    # NETWORKS TRAINED WITH NAR ALL THE WAY THROUGH
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230127-225022/checkpoints/" # Original (all x3 except dense, hops) w/ sign_with_tanh, lr=cos(1e-4->1e-5, 60), NAR(8bit, 1e-3), bs=512, 20221120-134420 init, 66%
     pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230128-123500/checkpoints/" # tern input (all x3 except dense, hops) w/ sign_with_tanh, lr=cos(1e-4->1e-5, 60), NAR(8bit, 1e-3), bs=512, 20230127-225022 init, 62%
+
+    # NETWORKS WITH DROPOUT
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202302/20230209-154352/checkpoints/" # Original (all x3 except dense, hops) w/ tanh, ATSCH(2000, 768), default rnn init, dropout=0.2, L2(1e-4), caching, 70%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202302/20230210-005047/checkpoints/" # Original (all x3 except dense, hops) w/ sign_with_tanh, cos(5e-5, 100, 1e-1), 20230209-154352 init, dropout=0, L2(1e-4), caching, 66%
+    # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202302/20230210-005047/checkpoints/" # tern input (all x3 except dense, hops) w/ sign_with_tanh, cos(5e-5, 100, 1e-1), 20230209-154352 init, dropout=0, L2(1e-4), caching, 62%
 
     # Init the environment
     strategy, dtype, num_workers = configure_environment(
@@ -1092,9 +1098,16 @@ def qkeras_qat(_):
         for layer in model.layers:
             if len(layer.trainable_weights) > 0:
                 all_weights = tf.concat([tf.reshape(x, shape=[-1]) for x in layer.trainable_weights], axis=-1)
-                tf.print("STD of all weights in ", layer.name, 1.0*tf.math.reduce_std(tf.abs(all_weights)))
+                tf.print("std   W  in ", layer.name, tf.math.reduce_std(all_weights))
+                tf.print("std  |W| in ", layer.name, tf.math.reduce_std(tf.abs(all_weights)))
+                tf.print("mean  W  in ", layer.name, tf.math.reduce_mean(all_weights))
+                tf.print("mean |W| in ", layer.name, tf.math.reduce_mean(tf.abs(all_weights)))
+                tf.print("")
         all_weights = tf.concat([tf.reshape(x, shape=[-1]) for x in model.trainable_weights], axis=-1)
-        tf.print("STD of all weights in ", model.name, 1.0*tf.math.reduce_std(tf.abs(all_weights)))
+        tf.print("std   W  all weights in ", model.name, tf.math.reduce_std(all_weights))
+        tf.print("std  |W| all weights in ", model.name, tf.math.reduce_std(tf.abs(all_weights)))
+        tf.print("mean  W  all weights in ", model.name, tf.math.reduce_mean(all_weights))
+        tf.print("mean |W| all weights in ", model.name, tf.math.reduce_mean(tf.abs(all_weights)))
 
         save_hparams(hparams, run_dir+TB_LOGS_DIR)
 
@@ -1119,7 +1132,8 @@ def qkeras_qat(_):
     )
 
     lr_callback = tf.keras.callbacks.LearningRateScheduler(
-        tf.keras.optimizers.schedules.CosineDecay(2e-6, 30, 1e-1), verbose=0
+        tf.keras.optimizers.schedules.CosineDecay(2e-6, 30, 1e-1), verbose=0 # for quant
+        # tf.keras.optimizers.schedules.CosineDecay(5e-5, 100, 1e-1), verbose=0
     )
 
     if RECORD_CKPTS:

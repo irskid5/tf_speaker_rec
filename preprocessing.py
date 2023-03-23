@@ -64,10 +64,11 @@ def preprocess_and_load(ds_train, ds_val, ds_test, ds_info, preprocessor, num_wo
     ds_val = ds_val.prefetch(AUTOTUNE)
 
     # Setup for test dataset
+    # ds_test = ds_test.filter(lambda x, y: tf.shape(x)[0] < 64000) # TO LIMIT DEPTH
     ds_test = ds_test.map(lambda x, y: preprocessor.preprocess_cast(x, y, MAX_AUDIO_LENGTH, dtype), num_parallel_calls=AUTOTUNE)
     if not eval_full:
         ds_test = ds_test.map(lambda x, y: preprocessor.preprocess(x, y, MAX_AUDIO_LENGTH, dtype), num_parallel_calls=AUTOTUNE)
-    ds_test = ds_test.shuffle(ds_info.splits["test"].num_examples)
+    # ds_test = ds_test.shuffle(ds_info.splits["test"].num_examples)
     ds_test = ds_test.batch(BATCH_SIZE*num_workers, drop_remainder=True)
     ds_test = ds_test.prefetch(AUTOTUNE)
 

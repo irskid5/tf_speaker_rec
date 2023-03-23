@@ -269,8 +269,8 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     irnn_identity_scale = hparams[HP_IRNN_IDENTITY_SCALE.name]
 
     # Regularizers (None for quantization I believe)
-    kernel_regularizer = None # tf.keras.regularizers.L2(1e-4) # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001)
-    recurrent_regularizer = None # tf.keras.regularizers.L2(1e-4) # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # BinaryEuclideanRegularizer(l2=1e-6) #TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4)
+    kernel_regularizer = tf.keras.regularizers.L2(1e-4) # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001)
+    recurrent_regularizer = tf.keras.regularizers.L2(1e-4) # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # BinaryEuclideanRegularizer(l2=1e-6) #TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4)
     bias_regularizer = None
     # activation_regularizer = None # tf.keras.regularizers.L2(l2=0.0001)
 
@@ -286,10 +286,10 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     dropout = None
     fold_batch_norm = False
     soft_thresh_tern = False
-    learned_thresh = True
+    learned_thresh = False
     add_no_acc_reg = False
     no_acc_reg_lm = 1e-5
-    acc_precision = 8
+    acc_precision = 10
 
     # Activation functions
     # activation_irnn = tf.keras.activations.tanh
@@ -312,7 +312,7 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     dense_kernel_initializer = tf.keras.initializers.VarianceScaling(scale=1.0 if soft_thresh_tern else 2.0, mode="fan_in", distribution="truncated_normal", seed=SEED) # "he_normal" is default 
     # bias_initializer = "ones"
 
-    g = 1.7
+    g = 1.6
     # 1.3, 1.4, 1.5, 2.0, all 512
     # 1.2 was good
 
@@ -331,7 +331,7 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     #     "SA_0_QDENSE_0": {"tern_quant_thresh": g*0.002621475, "g": g,}, 
     #     "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.003543641, "g": g,}, 
     #     "DENSE_0": {"tern_quant_thresh": g*0.005629966, "g": g,}, 
-    #     "DENSE_OUT": {"tern_quant_thresh": g*0.025896339, "g": g,}
+    #     "DENSE_OUT": {"tern_quant_thresh": 0.7*0.025896339, "g": 0.7,}
     # } # mean(|w|) for 20221125-112620 init
 
     # layer_options = {
@@ -468,7 +468,7 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
         add_no_acc_reg=add_no_acc_reg,
         no_acc_reg_lm=no_acc_reg_lm,
         no_acc_reg_bits=acc_precision,
-        s=5,
+        s=1,
         name="IRNN_0")(encode_in)
     # encode = tf.keras.layers.Lambda(lambda x: tf.debugging.check_numerics(x, message="Found NaN or Inf in "+str(x)), name="CHK_"+"IRNN_0")(encode)
     encode = TimeReduction(reduction_factor=2, batch_size=batch_size, name="TIME_REDUCTION_E")(encode)
@@ -504,7 +504,7 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
         add_no_acc_reg=add_no_acc_reg,
         no_acc_reg_lm=no_acc_reg_lm,
         no_acc_reg_bits=acc_precision,
-        s=5,
+        s=1,
         name="IRNN_1")(encode)
     # encode = tf.keras.layers.Lambda(lambda x: tf.debugging.check_numerics(x, message="Found NaN or Inf"), name="CHK_"+"IRNN_1")(encode)
     # SA Layer
@@ -552,7 +552,7 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
         fold_batch_norm=fold_batch_norm,
         add_dist_loss=add_dist_loss, # add_dist_loss, CHANGE BACK,
         soft_thresh_tern=soft_thresh_tern,
-        add_no_acc_reg=True,
+        add_no_acc_reg=add_no_acc_reg,
         no_acc_reg_lm=no_acc_reg_lm,
         no_acc_reg_bits=acc_precision,
         s=1,

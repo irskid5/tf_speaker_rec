@@ -144,6 +144,8 @@ pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/2022122
 # pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221229-144111/checkpoints/" # og + sign + tern + quant + NoAccReg2(0.001 all, 0.005 Dense0), 20221223-150643 init, 82%
 # pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221229-182840/checkpoints/" # og + sign + tern + (quant + NoAccReg2(0.001 all, 0.005 Dense0)), 20221222-202422 init, 84.48%
 
+pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202302/20230205-190617/checkpoints/"
+
 with strategy.scope():
     model = get_model()
 

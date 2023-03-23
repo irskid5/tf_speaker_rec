@@ -5,7 +5,7 @@ from tensorflow import keras
 
 from mnist_rnn_model import get_model
 
-pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202212/20221229-182840/checkpoints/"
+pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202303/20230309-102046/checkpoints/"
 
 model = get_model()
 

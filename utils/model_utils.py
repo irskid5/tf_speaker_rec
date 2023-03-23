@@ -1286,6 +1286,33 @@ def custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=8):
     #     return out
     return out
 
+def mod_on_inputs(x, num_bits=8):
+    """
+    Compute x mod 2**num_bits then run relu.
+    Note, no gradient passes from mod op by using tf.stop_gradient
+    """
+    # inner function to wrap stop gradient around to not take gradient into account
+    def _inner_fn(x, num_bits):
+        base = 2**num_bits
+        half_base = 2**(num_bits-1)
+
+        # Cast to int to do modular reduction
+        x_int = tf.cast(x, tf.int32)
+
+        # Perform modular reduction (creating unsigned int)
+        modded = tf.math.mod(x_int, base)
+
+        # Sign the int 
+        signed = tf.where(tf.greater_equal(modded, half_base), modded-base, modded)
+
+        # Cast back to float
+        signed_float = tf.cast(signed, tf.float32)
+
+        return signed_float
+
+    out = x + tf.stop_gradient(-x + _inner_fn(x, num_bits=num_bits))
+    return out
+
 class TrainableSignSwish(tf.Module):
     def __init__(self, a_init=None, name=""):
         self.a = tf.Variable(
@@ -2190,6 +2217,21 @@ def QSelfAttentionMechanismFn(
         axes=[2,1], 
         name=name+"_DOT", 
     )([sa_trans, inputs])
+
+    # SUMMING CODE ###########################################
+    # sum_col_inputs = tf.keras.layers.Lambda(
+    #     lambda x: tf.reduce_sum(x, axis=1, keepdims=True),
+    #     trainable=True,
+    #     name=name+"_SUM_COL_INPUTS")(inputs)
+    
+    # sum_row_sa = tf.keras.layers.Lambda(
+    #     lambda x: tf.reduce_sum(x, axis=-1, keepdims=True),
+    #     trainable=True,
+    #     name=name+"_SUM_ROW_SA")(sa_trans)
+
+    # sa_matmul3 = tf.keras.layers.Subtract()([sum_row_sa, sum_col_inputs])
+
+    ##########################################################
 
     # ADDED THIS TO SEE HOW IT WOULD WORK
     # if add_no_acc_reg:

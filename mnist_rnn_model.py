@@ -1,6 +1,6 @@
 from qkeras import *
 
-from utils.model_utils import TimeReduction, sign_with_tanh_deriv, QDenseWithNorm, QIRNN, custom_sign_with_tanh_deriv_mod_on_inputs, ModelWithGradInfo, GeneralActivation
+from utils.model_utils import TimeReduction, sign_with_tanh_deriv, QDenseWithNorm, QIRNN, custom_sign_with_tanh_deriv_mod_on_inputs, ModelWithGradInfo, GeneralActivation, mod_on_inputs
 from quantization import ternarize_tensor_with_threshold, LearnedThresholdTernary
 
 SEED = 1997
@@ -21,9 +21,9 @@ soft_thresh_tern = False
 learned_thresh = True
 tern = True
 add_no_acc_reg = True
-no_acc_reg_lm = 0
+no_acc_reg_lm = 1e-4
 add_dist_loss = False
-acc_precision = 3
+acc_precision = 6
 
 # Activation functions
 # activation_irnn = tf.keras.activations.tanh
@@ -135,15 +135,17 @@ def get_model():
     output = QDenseWithNorm(
         10, 
         use_bias=False,
-        activation=GeneralActivation(activation=tf.keras.activations.softmax, name="DENSE_OUT"), 
-        kernel_regularizer=kernel_regularizer, 
+        activation=GeneralActivation(activation=lambda x: tf.keras.activations.softmax(x), name="DENSE_OUT"), 
+        kernel_regularizer=tf.keras.regularizers.L1(5e-4), 
         kernel_quantizer=LearnedThresholdTernary(
             scale=1.0, 
             threshold=layer_options["DENSE_OUT"]["tern_quant_thresh"], 
             name="DENSE_OUT") if learned_thresh else kernel_quantizer, # 0.7*mean(|w|)
         kernel_initializer=dense_kernel_initializer, 
         add_dist_loss=add_dist_loss,
-        add_no_acc_reg=False,
+        add_no_acc_reg=True,
+        no_acc_reg_lm=0,
+        no_acc_reg_bits=acc_precision,
         s=1,
         name="DENSE_OUT",)(dense_0)
     

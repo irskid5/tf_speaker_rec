@@ -815,15 +815,15 @@ def post_quant_test(_, chk_dir=None):
     eval_full = True
 
     # Init the environment
-    # strategy, dtype, num_workers = configure_environment(
-    #     gpu_names=None,
-    #     fp16_run=False,
-    #     multi_strategy=False)
+    strategy, dtype, num_workers = configure_environment(
+        gpu_names=None,
+        fp16_run=False,
+        multi_strategy=False)
 
     # Choose device (Stateful RNN only works non-distributed)
-    strategy = tf.distribute.get_strategy()
-    num_workers = 1
-    dtype = tf.float32
+    # strategy = tf.distribute.get_strategy()
+    # num_workers = 1
+    # dtype = tf.float32
 
     if not isinstance(checkpoint_dir, list):
         checkpoint_dir = [checkpoint_dir]
@@ -1048,6 +1048,11 @@ def qkeras_qat(_):
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202302/20230210-005047/checkpoints/" # Original (all x3 except dense, hops) w/ sign_with_tanh, cos(5e-5, 100, 1e-1), 20230209-154352 init, dropout=0, L2(1e-4), caching, 66%
     # pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202302/20230210-005047/checkpoints/" # tern input (all x3 except dense, hops) w/ sign_with_tanh, cos(5e-5, 100, 1e-1), 20230209-154352 init, dropout=0, L2(1e-4), caching, 62%
 
+    # NETWORKS WITH ADD ATTENTION COMBO VS MULT
+    pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202303/20230316-191739/checkpoints/" # Original (all x3 except dense, hops) w/ tanh, cos(1e-4, 100, 1e-1), default rnn init, L2(1e-4), caching, 68.51%
+    pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202303/20230319-132807/checkpoints/" # Original (all x3 except dense, hops) w/ sign_with_tanh, cos(1e-4, 100, 1e-1), clipnorm=1, 20230316-191739 init, L2(1e-4), caching, 66.27%
+    pretrained_weights = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202303/20230320-021329/checkpoints/" # tern input (all x3 except dense, hops) w/ sign_with_tanh, cos(1e-4, 100, 1e-1), clipnorm=1, 20230319-132807 init, L2(1e-4), caching, 62%
+
     # Init the environment
     strategy, dtype, num_workers = configure_environment(
         gpu_names=None,
@@ -1088,26 +1093,26 @@ def qkeras_qat(_):
             logging.info('Restored checkpoint weights from {}.'.format(checkpoint_dir))
             
         # Reset the stat variables
-        weights = model.get_weights()
-        for i in range(len(weights)):
-            if "/w" in model.weights[i].name or "/x" in model.weights[i].name or "/inp_" in model.weights[i].name or "/out_" in model.weights[i].name:
-                weights[i] = 0*weights[i]
-        model.set_weights(weights)
+        # weights = model.get_weights()
+        # for i in range(len(weights)):
+        #     if "/w" in model.weights[i].name or "/x" in model.weights[i].name or "/inp_" in model.weights[i].name or "/out_" in model.weights[i].name:
+        #         weights[i] = 0*weights[i]
+        # model.set_weights(weights)
 
         # Calculate total weight stats
-        for layer in model.layers:
-            if len(layer.trainable_weights) > 0:
-                all_weights = tf.concat([tf.reshape(x, shape=[-1]) for x in layer.trainable_weights], axis=-1)
-                tf.print("std   W  in ", layer.name, tf.math.reduce_std(all_weights))
-                tf.print("std  |W| in ", layer.name, tf.math.reduce_std(tf.abs(all_weights)))
-                tf.print("mean  W  in ", layer.name, tf.math.reduce_mean(all_weights))
-                tf.print("mean |W| in ", layer.name, tf.math.reduce_mean(tf.abs(all_weights)))
-                tf.print("")
-        all_weights = tf.concat([tf.reshape(x, shape=[-1]) for x in model.trainable_weights], axis=-1)
-        tf.print("std   W  all weights in ", model.name, tf.math.reduce_std(all_weights))
-        tf.print("std  |W| all weights in ", model.name, tf.math.reduce_std(tf.abs(all_weights)))
-        tf.print("mean  W  all weights in ", model.name, tf.math.reduce_mean(all_weights))
-        tf.print("mean |W| all weights in ", model.name, tf.math.reduce_mean(tf.abs(all_weights)))
+        # for layer in model.layers:
+        #     if len(layer.trainable_weights) > 0:
+        #         all_weights = tf.concat([tf.reshape(x, shape=[-1]) for x in layer.trainable_weights], axis=-1)
+        #         tf.print("std   W  in ", layer.name, tf.math.reduce_std(all_weights))
+        #         tf.print("std  |W| in ", layer.name, tf.math.reduce_std(tf.abs(all_weights)))
+        #         tf.print("mean  W  in ", layer.name, tf.math.reduce_mean(all_weights))
+        #         tf.print("mean |W| in ", layer.name, tf.math.reduce_mean(tf.abs(all_weights)))
+        #         tf.print("")
+        # all_weights = tf.concat([tf.reshape(x, shape=[-1]) for x in model.trainable_weights], axis=-1)
+        # tf.print("std   W  all weights in ", model.name, tf.math.reduce_std(all_weights))
+        # tf.print("std  |W| all weights in ", model.name, tf.math.reduce_std(tf.abs(all_weights)))
+        # tf.print("mean  W  all weights in ", model.name, tf.math.reduce_mean(all_weights))
+        # tf.print("mean |W| all weights in ", model.name, tf.math.reduce_mean(tf.abs(all_weights)))
 
         save_hparams(hparams, run_dir+TB_LOGS_DIR)
 
@@ -1132,7 +1137,8 @@ def qkeras_qat(_):
     )
 
     lr_callback = tf.keras.callbacks.LearningRateScheduler(
-        tf.keras.optimizers.schedules.CosineDecay(2e-6, 30, 1e-1), verbose=0 # for quant
+        tf.keras.optimizers.schedules.CosineDecay(1e-4, 100, 1e-1), verbose=0
+        # tf.keras.optimizers.schedules.CosineDecay(2e-6, 30, 1e-1), verbose=0 # for quant
         # tf.keras.optimizers.schedules.CosineDecay(5e-5, 100, 1e-1), verbose=0
     )
 
@@ -1210,7 +1216,8 @@ if __name__ == '__main__':
     # post_quant_test(
     #     None, 
     #     chk_dir=[
-    #         "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230127-100353/checkpoints/", 
+    #         "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202302/20230208-192733/checkpoints/"
+    #         # "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202301/20230127-100353/checkpoints/", 
     #         # "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202211/20221125-112620/checkpoints/",
     #     ]
     # )

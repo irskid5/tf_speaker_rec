@@ -4,6 +4,8 @@ env
 .vscode
 test_code/tensorboard_tut/logs/
 test_code/tensorboard_tut/__pycache__/
+mnist_preprocessed/
+voxceleb_preprocessed/
 checkpoints/
 runs/*/checkpoints/
 runs/*/logs/tensorboard/plugins/*

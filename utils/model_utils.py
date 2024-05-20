@@ -576,6 +576,7 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
                 initializer="zeros",
                 trainable=False
             )
+            self.kernel_qmae = tf.keras.metrics.Mean(name='qmae'+"/"+self.kernel.name) # MAE
         if self.recurrent_quantizer:
             self.quantized_recurrent_kernel = self.add_weight(
                 name="quantized_recurrent_kernel",
@@ -584,6 +585,7 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
                 initializer="zeros",
                 trainable=False
             )
+            self.recurrent_kernel_qmae = tf.keras.metrics.Mean(name='qmae'+"/"+self.recurrent_kernel.name) # MAE
         if self.kernel_norm is not None:
             if self.fold_batch_norm:
                 self.folded_kernel = self.add_weight(
@@ -633,13 +635,13 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
             trainable=False
         )
 
-        self.wx_wh = self.add_weight(
-            name="wx_wh_f",
-            shape=[512, self.units],
-            dtype=self.kernel.dtype,
-            initializer="zeros",
-            trainable=False
-        )
+        # self.wx_wh = self.add_weight(
+        #     name="wx_wh_f",
+        #     shape=[512, self.units],
+        #     dtype=self.kernel.dtype,
+        #     initializer="zeros",
+        #     trainable=False
+        # )
 
         if self.soft_thresh_tern:
             self.kernel_2 = self.add_weight(
@@ -691,6 +693,7 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
                 trainable=False
             )
 
+    
     def call(self, inputs, states, training=None):
         prev_output = states[0] if nest.is_sequence(states) else states
 
@@ -724,6 +727,7 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
             quantized_kernel = self.kernel_quantizer_internal(folded_kernel)
             # For debugging to see quantized kernel
             self.quantized_kernel.assign(quantized_kernel)
+            self.add_metric(self.kernel_qmae(tf.reduce_mean(tf.abs(self.kernel-self.quantized_kernel))))
             
             # Quantize the second kernel for soft threshold ternarization
             if self.soft_thresh_tern:
@@ -751,6 +755,7 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
             quantized_recurrent = self.recurrent_quantizer_internal(folded_recurrent_kernel)
             # For debugging to see quantized kernel
             self.quantized_recurrent_kernel.assign(quantized_recurrent)
+            self.add_metric(self.recurrent_kernel_qmae(tf.reduce_mean(tf.abs(self.recurrent_kernel-self.quantized_recurrent_kernel))))
 
             # Quantize the second kernel for soft threshold ternarization and combine both
             if self.soft_thresh_tern:
@@ -799,7 +804,7 @@ class QSimpleRNNCellWithNorm(QSimpleRNNCell):
         output = h_norm/s + h_2_norm/s + tf.stop_gradient(-h_norm/s - h_2_norm/s + h_norm + h_2_norm)
 
         # Log stats
-        self.wx_wh.assign(0.90*self.wx_wh + 0.10*(h_norm + h_2_norm))
+        # self.wx_wh.assign(0.90*self.wx_wh + 0.10*(h_norm + h_2_norm))
 
         # Add bias if applicable 
         if self.bias is not None:
@@ -938,6 +943,7 @@ class QDenseWithNorm(QDense):
                 initializer="zeros",
                 trainable=False
             )
+            self.kernel_qmae = tf.keras.metrics.Mean(name='qmae'+"/"+self.kernel.name) # MAE
 
         if self.soft_thresh_tern:
             self.kernel_2 = self.add_weight(
@@ -991,15 +997,15 @@ class QDenseWithNorm(QDense):
             trainable=False
         )
 
-        wx_shp = input_shape.as_list()
-        wx_shp[0] = 512 
-        wx_shp[-1] = self.units
-        self.wx_full = tf.Variable(
-            initial_value=tf.zeros(shape=wx_shp, dtype=tf.float32),
-            name="wx_f",
-            trainable=False,
-            validate_shape=False,
-        )
+        # wx_shp = input_shape.as_list()
+        # wx_shp[0] = 512 
+        # wx_shp[-1] = self.units
+        # self.wx_full = tf.Variable(
+        #     initial_value=tf.zeros(shape=wx_shp, dtype=tf.float32),
+        #     name="wx_f",
+        #     trainable=False,
+        #     validate_shape=False,
+        # )
 
         self.x_input = self.add_weight(
             name="x_abs",
@@ -1027,6 +1033,7 @@ class QDenseWithNorm(QDense):
             quantized_kernel = self.kernel_quantizer_internal(folded_kernel)
             # For debugging to see quantized kernel
             self.quantized_kernel.assign(quantized_kernel)
+            self.add_metric(self.kernel_qmae(tf.reduce_mean(tf.abs(self.kernel-self.quantized_kernel))))
 
             # Quantize the second kernel for soft threshold ternarization
             if self.soft_thresh_tern:
@@ -1053,13 +1060,13 @@ class QDenseWithNorm(QDense):
         # Update stats
         reduce_dims = tf.range(0, tf.rank(h)-1)
         self.wx.assign(0.9*self.wx + 0.1*tf.reduce_mean(tf.abs(h), axis=reduce_dims)) 
-        self.wx_full.assign(0.9*self.wx_full + 0.1*h)
+        # self.wx_full.assign(0.9*self.wx_full + 0.1*h)
         
         output = h
         # Add bias if using bias
         if self.use_bias:
             # Fold the bias if folding BN
-            folded_bias = self.bias
+            folded_bias = self.bias + tf.stop_gradient(-self.bias + tf.round(100*self.bias))
             if self.norm is not None:
                 if self.fold_batch_norm:
                     folded_bias = self.norm.gamma * (folded_bias - self.norm.moving_mean) / tf.math.sqrt(self.norm.moving_variance + self.norm.epsilon) + self.norm.beta
@@ -1094,6 +1101,7 @@ class QDenseWithNorm(QDense):
         if self.norm is not None:
             if not self.fold_batch_norm:
                 output = self.norm(output)
+                # output -= tf.stop_gradient(tf.round(tf.sqrt((-self.norm.beta*tf.sqrt(self.norm.moving_variance+1e-8)+self.norm.moving_mean*self.norm.gamma)**2/(self.norm.gamma**2))))
                 # Record the diff between normed and not normed 
                 # reduceDims = tf.range(0, tf.rank(h)-1)
                 # self.delta_kernel_norm.assign(0.99*self.delta_kernel_norm + 0.01*(tf.reduce_mean(h, axis=reduceDims) - tf.reduce_mean(output, axis=reduceDims)))
@@ -1227,6 +1235,15 @@ def sign_with_tanh_deriv(x):
     q += (1.0 - tf.math.abs(q))
     return out + tf.stop_gradient(-out + q)
 
+def grey_sign_with_tanh_deriv(x):
+    out = tf.keras.activations.tanh(x)
+    q = tf.where(tf.abs(x) < 1, 0.0, x) # to grey out a zone
+    q = tf.math.sign(q)
+    zeros = (1.0 - tf.math.abs(q))
+    random_signs = tf.math.sign(tf.random.uniform(shape=tf.shape(zeros), minval=-1, maxval=1, dtype=tf.float32))
+    q += zeros*random_signs
+    return out + tf.stop_gradient(-out + q)
+    
 def sign_with_htanh_deriv(x):
     out = hard_tanh(x)
     q = tf.math.sign(x)
@@ -1275,6 +1292,10 @@ def custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=8):
 
         return signed_float
 
+    # GREY SIGN
+    # out = grey_sign_with_tanh_deriv(x) + tf.stop_gradient(-grey_sign_with_tanh_deriv(x) + grey_sign_with_tanh_deriv(_inner_fn(x, num_bits=num_bits)))
+    
+    # Regular sign
     out = sign_with_tanh_deriv(x) + tf.stop_gradient(-sign_with_tanh_deriv(x) + sign_with_tanh_deriv(_inner_fn(x, num_bits=num_bits)))
 
     # For seeing distribution of input to activation
@@ -1889,7 +1910,7 @@ class DistributionLossLayer(tf.keras.layers.Layer):
     """
     Adapted from ArXiv:1904.02823 "Regularizing Activation Distribution for Training Binarized Deep Networks"
     """
-    def __init__(self, rate=0.001, k_d=0., k_s=0., k_m=0.): # k_d=1, k_s=0.25, k_m=0.25 are default
+    def __init__(self, rate=1e-3, k_d=0., k_s=0., k_m=0.): # k_d=1, k_s=0.25, k_m=0.25 are default
         super(DistributionLossLayer, self).__init__()
         self.rate = rate
         self.k_d = k_d
@@ -2248,10 +2269,15 @@ def QSelfAttentionMechanismFn(
     # bias_correction = tf.Variable(
     #     initial_value="zeros",
     #     trainable=True,
-    #     shape=[n_h*n_k],
+    #     shape=[n_h*n_k,],
+    #     name="attention_bias"
     # )
-    # sa_output = tf.keras.layers.Add()([sa_output, bias_correction])
-    # sa_output = tf.keras.layers.Reshape([n_h], name=name+"_OUTPUT")(sa_avg)
+    # sa_add_bias = tf.keras.layers.Lambda(
+    #     lambda x: x + tf.stop_gradient(-x + tf.round(x*100)),
+    #     name="SA_ADD_BIAS"
+    # )(bias_correction)
+    # sa_output = tf.keras.layers.Add()([sa_output, sa_add_bias])
+    # sa_output = tf.keras.layers.Reshape([n_h], name=name+"_OUTPUT")(sa_output)
 
     return sa_output
 

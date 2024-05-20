@@ -24,7 +24,7 @@ import numpy as np
 ds_test, ds_info = tfds.load(
     "mnist",
     split="test",
-    shuffle_files=True,
+    shuffle_files=False,
     as_supervised=True,
     with_info=True,
 )
@@ -63,9 +63,12 @@ def cast_tensor_to_int8(tensor):
 def reshape_img(image):
     return tf.squeeze(image, axis=-1)
 
+def resize_img(image):
+    return tf.image.resize(image, [128,128])
 
 def prepare_for_tfhe(image, label):
-    img = reshape_img(image)
+    img = resize_img(image)
+    img = reshape_img(img)
     img = cast_tensor_to_float32(img)
     img = normalize_img(img)
     img = ternarize_img(img)
@@ -97,9 +100,9 @@ print("Converted to Numpy")
 directory = './mnist_preprocessed'
 if not os.path.exists(directory):
     os.makedirs(directory)
-np.save(directory+"/mnist_images_norm_tern.npy", image_list)
-np.save(directory+"/mnist_labels.npy", label_list)
-np.savez(directory+"/mnist_norm_tern.npz",
+np.save(directory+"/mnist_images_norm_tern_128x128.npy", image_list)
+np.save(directory+"/mnist_labels_128x128.npy", label_list)
+np.savez(directory+"/mnist_norm_tern_128x128.npz",
          X=image_list, y=label_list)
 
 print("Saved NPY+NPZ files of preprocessed MNIST Images and Labels")

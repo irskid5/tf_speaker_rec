@@ -4,10 +4,11 @@ import tensorflow as tf
 from tensorflow import keras
 
 from mnist_rnn_model import get_model
+from mnist_rnn import options, layer_options
 
-pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202303/20230309-102046/checkpoints/"
+pretrained_weights = "/home/vele/Documents/masters/mnist_rnn/runs/202304/20230402-145048/checkpoints/"
 
-model = get_model()
+model = get_model(options, layer_options)
 
 if pretrained_weights is not None:
     model.load_weights(pretrained_weights)

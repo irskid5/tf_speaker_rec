@@ -26,7 +26,7 @@ def import_dataset(dataset_name, dataset_dir):
     (ds_train, ds_val, ds_test), ds_info = tfds.load(dataset_name,
                                                      split=[
                                                          'train', 'validation', 'test'],
-                                                     shuffle_files=True,
+                                                     shuffle_files=False,
                                                      as_supervised=True,
                                                      with_info=True,
                                                      data_dir=dataset_dir)
@@ -64,7 +64,8 @@ def preprocess_and_load(ds_train, ds_val, ds_test, ds_info, preprocessor, num_wo
     ds_val = ds_val.prefetch(AUTOTUNE)
 
     # Setup for test dataset
-    # ds_test = ds_test.filter(lambda x, y: tf.shape(x)[0] < 64000) # TO LIMIT DEPTH
+    # l = 8
+    # ds_test = ds_test.filter(lambda x, y: tf.shape(x)[0] >= 16000*(l-1) and tf.shape(x)[0] < 16000*(l)) # TO LIMIT DEPTH
     ds_test = ds_test.map(lambda x, y: preprocessor.preprocess_cast(x, y, MAX_AUDIO_LENGTH, dtype), num_parallel_calls=AUTOTUNE)
     if not eval_full:
         ds_test = ds_test.map(lambda x, y: preprocessor.preprocess(x, y, MAX_AUDIO_LENGTH, dtype), num_parallel_calls=AUTOTUNE)

@@ -15,6 +15,7 @@ from quantization import *
 def get_model(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False, g=1.0):
     # CHOOSE MODEL -----------------------------------------------
     model = quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful, dtype, inference, g=g)
+    # model = speaker_rec_model_att_like(hparams, num_classes, stateful, dtype, inference)
     # ------------------------------------------------------------
 
     model.summary()
@@ -51,7 +52,7 @@ def speaker_rec_model(hparams, num_classes, stateful=False, dtype=tf.float32, in
     # ---------------------------------------------------------------------------------------
 
     # Trainable layers ----------------------------------------------------------------------
-    output = tf.keras.layers.LayerNormalization(axis=1, name="NORMALIZE")(output)
+    # output = tf.keras.layers.LayerNormalization(axis=1, name="NORMALIZE")(output)
     # output = tf.keras.layers.Dropout(0.2)(output)
     # output = tf.keras.layers.Conv1D(128, 3, strides=2 ,activation="relu", use_bias=True)(output)
     # output = tf.keras.layers.AveragePooling1D(pool_size=2, strides=2)(output)
@@ -157,6 +158,19 @@ def speaker_rec_model_att_like(hparams, num_classes, stateful=False, dtype=tf.fl
     num_self_att_hops = hparams[HP_NUM_SELF_ATT_HOPS.name]
     num_dense_units = hparams[HP_NUM_DENSE_UNITS.name]
 
+    # Activation functions
+    # activation_irnn = sign_with_ste
+    # activation_dense = sign_with_ste
+
+    # Activation fns (quantized)
+    # activation_irnn = lambda x: custom_relu_quantize_outputs(x, num_bits=8)
+    # activation_dense = lambda x: custom_relu_quantize_outputs(x, num_bits=8)
+
+    # Regularizers
+    kernel_regularizer = tf.keras.regularizers.L2(l2=0.0001)
+    recurrent_regularizer = tf.keras.regularizers.L2(l2=0.0001)
+    bias_regularizer = None
+
     batch_size = None
     if stateful:
         batch_size = 1
@@ -193,8 +207,8 @@ def speaker_rec_model_att_like(hparams, num_classes, stateful=False, dtype=tf.fl
         # recurrent_activation="relu",
         return_sequences=True, 
         stateful=stateful,
-        kernel_regularizer=keras.regularizers.L2(l2=0.0001),
-        recurrent_regularizer=keras.regularizers.L2(l2=0.0001),
+        kernel_regularizer=kernel_regularizer,
+        recurrent_regularizer=recurrent_regularizer,
         # recurrent_initializer=keras.initializers.Identity(),
         # kernel_initializer=keras.initializers.RandomNormal(mean=0, stddev=0.001, seed=1997),
         name="LSTM_0")(encode_in)
@@ -207,20 +221,25 @@ def speaker_rec_model_att_like(hparams, num_classes, stateful=False, dtype=tf.fl
         # recurrent_activation="relu",
         return_sequences=True, 
         stateful=stateful, 
-        kernel_regularizer=keras.regularizers.L2(l2=0.0001),
-        recurrent_regularizer=keras.regularizers.L2(l2=0.0001),
+        kernel_regularizer=kernel_regularizer,
+        recurrent_regularizer=recurrent_regularizer,
         # recurrent_initializer=keras.initializers.Identity(),
         # kernel_initializer=keras.initializers.RandomNormal(mean=0, stddev=0.001, seed=1997),
         name="LSTM_1")(encode)
 
-    encode = BreakpointLayerForDebug()(encode)
+    # encode = BreakpointLayerForDebug()(encode)
 
     # SA Layer
     sa_output = SelfAttentionMechanismFn(
         num_self_att_hops, 
         num_self_att_units, 
         encode, 
+        kernel_regularizer=kernel_regularizer,
+        bias_regularizer=bias_regularizer,
+        activation=tf.keras.activations.tanh,
         name="SA_0")
+
+    sa_output = tf.keras.layers.LayerNormalization()(sa_output)
 
     # sa_stacked_out = tf.keras.layers.Reshape([num_self_att_hops, num_lstm_units], name="SA_1_INPUT")(sa_output)
 
@@ -230,13 +249,13 @@ def speaker_rec_model_att_like(hparams, num_classes, stateful=False, dtype=tf.fl
     #     sa_stacked_out, 
     #     name="SA_1")
 
-    output_proj = tf.keras.layers.Dense(num_dense_units, kernel_regularizer=keras.regularizers.L2(l2=0.0001), activation="relu", name="DENSE_0")(sa_output)
+    output_proj = tf.keras.layers.Dense(num_dense_units, kernel_regularizer=kernel_regularizer, activation=tf.keras.activations.tanh, name="DENSE_0")(sa_output)
 
     # TEST LAYER FOR LINEAR SEPARABILITY
     # output_proj = tf.keras.layers.Dense(2, activation="relu", name="TEST_PROJECTION")(output_proj)
 
     # Output logits layers
-    output = tf.keras.layers.Dense(num_classes, activation=None, kernel_regularizer=keras.regularizers.L2(l2=0.0001), name="DENSE_OUT")(output_proj)
+    output = tf.keras.layers.Dense(num_classes, activation=tf.keras.activations.softmax, kernel_regularizer=kernel_regularizer, name="DENSE_OUT")(output_proj)
     
     # Output activation layer
     # output = tf.keras.layers.Activation(activation="sigmoid", name="SIGMOID_OUT")(output)
@@ -257,7 +276,7 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     FRAME_LENGTH = int(hparams[HP_FRAME_LENGTH.name] * SAMPLE_RATE)
     FRAME_STEP = int(hparams[HP_FRAME_STEP.name] * SAMPLE_RATE)
     MAX_AUDIO_LENGTH = hparams[HP_MAX_NUM_FRAMES.name] * FRAME_STEP + FRAME_LENGTH - FRAME_STEP
-    SEED = hparams[HP_SEED.name]
+    SEED = 1997 # hparams[HP_SEED.name]
     # NUM_MEL_BINS = hparams[HP_NUM_MEL_BINS.name]
 
     # Model parameters
@@ -269,14 +288,14 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     irnn_identity_scale = hparams[HP_IRNN_IDENTITY_SCALE.name]
 
     # Regularizers (None for quantization I believe)
-    kernel_regularizer = tf.keras.regularizers.L2(1e-4) # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001)
-    recurrent_regularizer = tf.keras.regularizers.L2(1e-4) # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # BinaryEuclideanRegularizer(l2=1e-6) #TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4)
+    kernel_regularizer = None # tf.keras.regularizers.L1(5e-4) # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001)
+    recurrent_regularizer = None # tf.keras.regularizers.L1(5e-4) # NoAccRegularizer(0.001, k=256) # tf.keras.regularizers.L2(0.0001) # tf.keras.regularizers.L1(l1=1e-5) # VarianceRegularizer(l2=2.0) # tf.keras.regularizers.L2(0.0001) # BinaryEuclideanRegularizer(l2=1e-6) #TernaryEuclideanRegularizer(l2=0.00001, beta=4) # tf.keras.regularizers.L2(0.0001) # TernaryEuclideanRegularizer(l2=0.00001, beta=4)
     bias_regularizer = None
     # activation_regularizer = None # tf.keras.regularizers.L2(l2=0.0001)
 
     # Quantization functions (General)
-    kernel_quantizer = None # stochastic_ternary(alpha=1.0, threshold=0.0126744006) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.01) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.7*tf.reduce_mean(tf.abs(x))) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
-    recurrent_quantizer = None # stochastic_ternary(alpha=1.0, threshold=0.0126744006) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.02) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.08) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
+    kernel_quantizer = None # quantized_bits(bits=5, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # lambda x: symmetric_qauntize_tensor(x, num_bits=5) # stochastic_ternary(alpha=1.0, threshold=0.0126744006) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.01) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.7*tf.reduce_mean(tf.abs(x))) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
+    recurrent_quantizer = None # quantized_bits(bits=5, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # lambda x: symmetric_qauntize_tensor(x, num_bits=5) # stochastic_ternary(alpha=1.0, threshold=0.0126744006) # binary(alpha=0.5) # stochastic_ternary(alpha=1, threshold=0.02) # ternary(alpha=1, threshold=0.1) # quantized_bits(bits=4, integer=0, symmetric=1, keep_negative=True, alpha=1.0) # ternary(alpha=1, threshold=lambda x: 0.08) # quantized_bits(bits=2, integer=2, symmetric=1, keep_negative=True)
     bias_quantizer = None # ternary(alpha=1) # quantized_bits(bits=8, integer=8, symmetric=1, keep_negative=True)
 
     # Additions to code i.e. other hyperparameters
@@ -286,9 +305,9 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     dropout = None
     fold_batch_norm = False
     soft_thresh_tern = False
-    learned_thresh = False
-    add_no_acc_reg = False
-    no_acc_reg_lm = 1e-5
+    learned_thresh = True
+    add_no_acc_reg = True
+    no_acc_reg_lm = 1e-4
     acc_precision = 10
 
     # Activation functions
@@ -296,13 +315,17 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     # activation_dense = tf.keras.activations.tanh
 
     # Activation fns (quantized)
-    activation_irnn = sign_with_tanh_deriv
-    activation_dense = sign_with_tanh_deriv
+    # activation_irnn = sign_with_tanh_deriv
+    # activation_dense = sign_with_tanh_deriv
 
     # Activation fns (quantized with mod)
-    # activation_irnn = lambda x: custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=acc_precision)
-    # activation_dense = lambda x: custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=acc_precision)
+    activation_irnn = lambda x: custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=acc_precision)
+    activation_dense = lambda x: custom_sign_with_tanh_deriv_mod_on_inputs(x, num_bits=acc_precision)
     
+    # Activation fns (quantized with random at 0)
+    # activation_irnn = grey_sign_with_tanh_deriv
+    # activation_dense = grey_sign_with_tanh_deriv
+
     # Input ternary?
     tern_input = True
 
@@ -325,14 +348,23 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     #     "DENSE_OUT": {"tern_quant_thresh": g*0.0178621784, "g": g,}
     # } # std(|w|) for 20221125-112620 init
 
+    layer_options = {
+        "IRNN_0": {"tern_quant_thresh": g*0.010765957, "g": g,}, 
+        "IRNN_1": {"tern_quant_thresh": g*0.009046354, "g": g,}, 
+        "SA_0_QDENSE_0": {"tern_quant_thresh": g*0.002621475, "g": g,}, 
+        "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.003543641, "g": g,}, 
+        "DENSE_0": {"tern_quant_thresh": g*0.005629966, "g": g,}, 
+        "DENSE_OUT": {"tern_quant_thresh": 0.7*0.025896339, "g": 0.7,}
+    } # mean(|w|) for 20221125-112620 init
+
     # layer_options = {
-    #     "IRNN_0": {"tern_quant_thresh": g*0.010765957, "g": g,}, 
-    #     "IRNN_1": {"tern_quant_thresh": g*0.009046354, "g": g,}, 
-    #     "SA_0_QDENSE_0": {"tern_quant_thresh": g*0.002621475, "g": g,}, 
-    #     "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.003543641, "g": g,}, 
-    #     "DENSE_0": {"tern_quant_thresh": g*0.005629966, "g": g,}, 
-    #     "DENSE_OUT": {"tern_quant_thresh": 0.7*0.025896339, "g": 0.7,}
-    # } # mean(|w|) for 20221125-112620 init
+    #     "IRNN_0": {"tern_quant_thresh": g*0.0101835579, "g": g,}, 
+    #     "IRNN_1": {"tern_quant_thresh": g*0.00819684938, "g": g,}, 
+    #     "SA_0_QDENSE_0": {"tern_quant_thresh": g*0.00121568283, "g": g,}, 
+    #     "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.00910014939, "g": g,}, 
+    #     "DENSE_0": {"tern_quant_thresh": g*0.00495961029, "g": g,}, 
+    #     "DENSE_OUT": {"tern_quant_thresh": 0.7*0.0155248865, "g": 0.7,}
+    # } # mean(|w|) for 20221120-134420 init
 
     # layer_options = {
     #     "IRNN_0": {"tern_quant_thresh": g*0.011855823, "g": g,}, 
@@ -352,14 +384,14 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     #     "DENSE_OUT": {"tern_quant_thresh": g*0.03391825, "g": g,}
     # } # std(w) for 20230128-123500 init
 
-    layer_options = {
-        "IRNN_0": {"tern_quant_thresh": g*0.011038369, "g": g,}, 
-        "IRNN_1": {"tern_quant_thresh": g*0.009466604, "g": g,}, 
-        "SA_0_QDENSE_0": {"tern_quant_thresh": g*0.003863955, "g": g,}, 
-        "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.003373463, "g": g,}, 
-        "DENSE_0": {"tern_quant_thresh": g*0.007742954, "g": g,}, 
-        "DENSE_OUT": {"tern_quant_thresh": 0.7*0.027738357, "g": 0.7,}
-    } # mean(|w|) for 20230128-123500 init
+    # layer_options = {
+    #     "IRNN_0": {"tern_quant_thresh": g*0.011038369, "g": g,}, 
+    #     "IRNN_1": {"tern_quant_thresh": g*0.009466604, "g": g,}, 
+    #     "SA_0_QDENSE_0": {"tern_quant_thresh": g*0.003863955, "g": g,}, 
+    #     "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.003373463, "g": g,}, 
+    #     "DENSE_0": {"tern_quant_thresh": g*0.007742954, "g": g,}, 
+    #     "DENSE_OUT": {"tern_quant_thresh": 0.7*0.027738357, "g": 0.7,}
+    # } # mean(|w|) for 20230128-123500 init
 
     # layer_options = {
     #     "IRNN_0": {"tern_quant_thresh": g*0.000814461615, "g": g,}, 
@@ -368,6 +400,33 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
     #     "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.00356123107, "g": g,}, 
     #     "DENSE_0": {"tern_quant_thresh": g*0.00486144843, "g": g,}, 
     #     "DENSE_OUT": {"tern_quant_thresh": 0.7*0.018041607, "g": 0.7,}
+    # } # mean(|w|) for 20230128-123500 init
+
+    # layer_options = {
+    #     "IRNN_0": {"tern_quant_thresh": g*0.0106294742, "g": g,}, 
+    #     "IRNN_1": {"tern_quant_thresh": g*0.00892521255, "g": g,}, 
+    #     "SA_0_QDENSE_0": {"tern_quant_thresh": g*0.00251139281, "g": g,}, 
+    #     "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.00381011679, "g": g,}, 
+    #     "DENSE_0": {"tern_quant_thresh": g*0.00552857434, "g": g,}, 
+    #     "DENSE_OUT": {"tern_quant_thresh": 0.7*0.025167983, "g": 0.7,}
+    # } # mean(|w|) for 20230330-211344 init
+
+    # layer_options = {
+    #     "IRNN_0": {"tern_quant_thresh": g*0.0128497854, "g": g,}, 
+    #     "IRNN_1": {"tern_quant_thresh": g*0.00993360765, "g": g,}, 
+    #     "SA_0_QDENSE_0": {"tern_quant_thresh": g*0.00323194358, "g": g,}, 
+    #     "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.00331409764, "g": g,}, 
+    #     "DENSE_0": {"tern_quant_thresh": g*0.00604735455, "g": g,}, 
+    #     "DENSE_OUT": {"tern_quant_thresh": 0.7*0.0312328376, "g": 0.7,}
+    # } # mean(|w|) for 20230414-134906 init
+
+    # layer_options = {
+    #     "IRNN_0": {"tern_quant_thresh": g*0.00653267745, "g": g,}, 
+    #     "IRNN_1": {"tern_quant_thresh": g*0.00665417407, "g": g,}, 
+    #     "SA_0_QDENSE_0": {"tern_quant_thresh": g*0.000769669772, "g": g,}, 
+    #     "SA_0_QDENSE_1": {"tern_quant_thresh": g*0.00275281747, "g": g,}, 
+    #     "DENSE_0": {"tern_quant_thresh": g*0.00595409749, "g": g,}, 
+    #     "DENSE_OUT": {"tern_quant_thresh": 0.7*0.0347943269, "g": 0.7,}
     # } # mean(|w|) for 20230128-123500 init
 
     # Debug
@@ -433,6 +492,13 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
         dtype=dtype,
         name="TERNARIZE_WITH_THRESHOLD"
     )(encode_in) if tern_input else encode_in
+    # encode_in = tf.keras.layers.Lambda(
+    #     lambda x: tf.stop_gradient(quantized_bits(5, 0, symmetric=True, keep_negative=True, alpha=1.0)(x)),
+    #     trainable=False,
+    #     dtype=dtype,
+    #     name="QUANTIZE_5BIT_SYM"
+    # )(encode_in) if tern_input else encode_in
+    
     # ---------------------------------------------------------------------------------------
 
     # Trainable layers ----------------------------------------------------------------------
@@ -468,7 +534,7 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
         add_no_acc_reg=add_no_acc_reg,
         no_acc_reg_lm=no_acc_reg_lm,
         no_acc_reg_bits=acc_precision,
-        s=1,
+        s=6,
         name="IRNN_0")(encode_in)
     # encode = tf.keras.layers.Lambda(lambda x: tf.debugging.check_numerics(x, message="Found NaN or Inf in "+str(x)), name="CHK_"+"IRNN_0")(encode)
     encode = TimeReduction(reduction_factor=2, batch_size=batch_size, name="TIME_REDUCTION_E")(encode)
@@ -504,7 +570,7 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
         add_no_acc_reg=add_no_acc_reg,
         no_acc_reg_lm=no_acc_reg_lm,
         no_acc_reg_bits=acc_precision,
-        s=1,
+        s=6,
         name="IRNN_1")(encode)
     # encode = tf.keras.layers.Lambda(lambda x: tf.debugging.check_numerics(x, message="Found NaN or Inf"), name="CHK_"+"IRNN_1")(encode)
     # SA Layer
@@ -568,8 +634,8 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
             activation=tf.keras.activations.softmax, 
             name="DENSE_OUT"), 
         kernel_initializer=dense_kernel_initializer,
-        kernel_regularizer=kernel_regularizer, # if kernel_regularizer else AdaptiveBinaryTernaryRegularizer(lm=1e-1, name="DENSE_OUT"),
-        bias_regularizer=bias_regularizer, 
+        kernel_regularizer=None, # if kernel_regularizer else AdaptiveBinaryTernaryRegularizer(lm=1e-1, name="DENSE_OUT"),
+        bias_regularizer=None, 
         kernel_quantizer=LearnedThresholdTernary(
             scale=1.0, 
             threshold=layer_options["DENSE_OUT"]["tern_quant_thresh"], 
@@ -581,7 +647,7 @@ def quantized_speaker_rec_model_IRNN_att_like(hparams, num_classes, stateful=Fal
         soft_thresh_tern=soft_thresh_tern,
         add_no_acc_reg=False,
         no_acc_reg_lm=0,
-        no_acc_reg_bits=acc_precision,
+        no_acc_reg_bits=12,
         s=1,
         name="DENSE_OUT")(output_proj)
 
@@ -888,7 +954,7 @@ def speaker_rec_model_rnnt_like(hparams, num_classes, stateful=False, dtype=tf.f
 
     output = tf.keras.layers.Dense(num_classes, activation="relu", name="DENSE_0")(output)
 
-    output = GlobalWeightedMaxPooling1D(name="VOTE")(output)
+    # output = GlobalWeightedMaxPooling1D(name="VOTE")(output)
 
     # output = tf.keras.layers.Lambda(lambda x: tf.nn.sigmoid(x), name="SIGMOID_OUT")(output)
     output = tf.keras.layers.Softmax(name="SOFTMAX_OUT", dtype=dtype)(output)
@@ -1064,7 +1130,7 @@ def speaker_rec_model_w_pooling(hparams, num_classes, stateful=False, dtype=tf.f
     output = tf.keras.layers.LSTM(num_classes, return_sequences=True, name="LSTM_3")(output)
     # output = tf.keras.layers.TimeDistributed(tf.keras.layers.Softmax(), name="TIME_DIST_SOFTMAX_0")(output)
     # output = tf.keras.layers.Lambda(lambda x: tf.math.reduce_prod(x, axis=1), name="MULT_ACROSS")(output)
-    output = GlobalWeightedMaxPooling1D()(output)
+    # output = GlobalWeightedMaxPooling1D()(output)
     output = tf.keras.layers.Softmax()(output)
     # output = tf.keras.layers.Flatten()(output)
     # output = tf.keras.layers.Dense(num_classes, activation="softmax")(output)
@@ -1139,51 +1205,51 @@ def speaker_rec_model_convlstm(hparams, num_classes, stateful=False, dtype=tf.fl
 
 
 # VGGVox verification model
-def vggvox_model(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
-	# Preprocessing parameters
-    SAMPLE_RATE = hparams[HP_SAMPLE_RATE.name]
-    FRAME_LENGTH = int(hparams[HP_FRAME_LENGTH.name] * SAMPLE_RATE)
-    FRAME_STEP = int(hparams[HP_FRAME_STEP.name] * SAMPLE_RATE)
-    MAX_AUDIO_LENGTH = hparams[HP_MAX_NUM_FRAMES.name] * FRAME_STEP + FRAME_LENGTH - FRAME_STEP
-    # NUM_MEL_BINS = hparams[HP_NUM_MEL_BINS.name]
+# def vggvox_model(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
+# 	# Preprocessing parameters
+#     SAMPLE_RATE = hparams[HP_SAMPLE_RATE.name]
+#     FRAME_LENGTH = int(hparams[HP_FRAME_LENGTH.name] * SAMPLE_RATE)
+#     FRAME_STEP = int(hparams[HP_FRAME_STEP.name] * SAMPLE_RATE)
+#     MAX_AUDIO_LENGTH = hparams[HP_MAX_NUM_FRAMES.name] * FRAME_STEP + FRAME_LENGTH - FRAME_STEP
+#     # NUM_MEL_BINS = hparams[HP_NUM_MEL_BINS.name]
 
-    # Model hyperparameters
-    num_lstm_units = hparams[HP_NUM_LSTM_UNITS.name]
-    lstm_output_shape = [None, num_lstm_units]
-    num_dense_units = hparams[HP_NUM_DENSE_UNITS.name]
+#     # Model hyperparameters
+#     num_lstm_units = hparams[HP_NUM_LSTM_UNITS.name]
+#     lstm_output_shape = [None, num_lstm_units]
+#     num_dense_units = hparams[HP_NUM_DENSE_UNITS.name]
 
-    batch_size = None
-    if stateful:
-        batch_size = 1
+#     batch_size = None
+#     if stateful:
+#         batch_size = 1
 
-    # input_shape = [None, hparams[HP_NUM_MEL_BINS.name] * hparams[HP_STACK_SIZE.name]]
-    input_shape = [MAX_AUDIO_LENGTH]
+#     # input_shape = [None, hparams[HP_NUM_MEL_BINS.name] * hparams[HP_STACK_SIZE.name]]
+#     input_shape = [MAX_AUDIO_LENGTH]
 
-    # Define model
-    # Preprocessing layers (for on device) -------------------------------------------------
-    input = tf.keras.Input(shape=input_shape, batch_size=batch_size,
-                           dtype=dtype, name='INPUT')
-    output = tf.keras.layers.Lambda(lambda x: convert_to_log_mel_spec_layer(x, hparams=hparams), name="LOG_MEL_SPEC", trainable=False)(input)
-    # output = tf.keras.layers.Lambda(normalize_log_mel_layer, name="NORMALIZE")(output)
-    # output = tf.keras.layers.Lambda(lambda x: group_and_downsample_spec_v2_layer(x, hparams=hparams), name="DOWNSAMPLE", trainable=False)(output)
-    # ---------------------------------------------------------------------------------------
+#     # Define model
+#     # Preprocessing layers (for on device) -------------------------------------------------
+#     input = tf.keras.Input(shape=input_shape, batch_size=batch_size,
+#                            dtype=dtype, name='INPUT')
+#     output = tf.keras.layers.Lambda(lambda x: convert_to_log_mel_spec_layer(x, hparams=hparams), name="LOG_MEL_SPEC", trainable=False)(input)
+#     # output = tf.keras.layers.Lambda(normalize_log_mel_layer, name="NORMALIZE")(output)
+#     # output = tf.keras.layers.Lambda(lambda x: group_and_downsample_spec_v2_layer(x, hparams=hparams), name="DOWNSAMPLE", trainable=False)(output)
+#     # ---------------------------------------------------------------------------------------
 
-    output = tf.keras.layers.Lambda(lambda x: tf.transpose(x, perm=[0, 2, 1]))(output) # Maybe need to conv over features, not ts
+#     output = tf.keras.layers.Lambda(lambda x: tf.transpose(x, perm=[0, 2, 1]))(output) # Maybe need to conv over features, not ts
 
-    output = tf.keras.layers.Lambda(lambda x: tf.expand_dims(x, axis=-1), name="EXPAND")(output)
+#     output = tf.keras.layers.Lambda(lambda x: tf.expand_dims(x, axis=-1), name="EXPAND")(output)
 
-    # Trainable layers ----------------------------------------------------------------------
-    output = conv_bn_pool(output,layer_idx=1,conv_filters=96,conv_kernel_size=(7,7),conv_strides=(2,2),conv_pad=(1,1), pool='max',pool_size=(3,3),pool_strides=(2,2))
-    output = conv_bn_pool(output,layer_idx=2,conv_filters=256,conv_kernel_size=(5,5),conv_strides=(2,2),conv_pad=(1,1), pool='max',pool_size=(3,3),pool_strides=(2,2))
-    output = conv_bn_pool(output,layer_idx=3,conv_filters=384,conv_kernel_size=(3,3),conv_strides=(1,1),conv_pad=(1,1))
-    output = conv_bn_pool(output,layer_idx=4,conv_filters=256,conv_kernel_size=(3,3),conv_strides=(1,1),conv_pad=(1,1))
-    output = conv_bn_pool(output,layer_idx=5,conv_filters=256,conv_kernel_size=(3,3),conv_strides=(1,1),conv_pad=(1,1), pool='max',pool_size=(5,3),pool_strides=(3,2))		
-    output = conv_bn_dynamic_apool(output,layer_idx=6,conv_filters=4096,conv_kernel_size=(5,1),conv_strides=(1,1),conv_pad=(0,0), conv_layer_prefix='fc')
-    output = conv_bn_pool(output,layer_idx=7,conv_filters=1024,conv_kernel_size=(1,1),conv_strides=(1,1),conv_pad=(0,0), conv_layer_prefix='fc')
-    output = tf.keras.layers.Lambda(lambda y: K.l2_normalize(y, axis=3), name='norm')(output)
-    output = tf.keras.layers.Dense(num_classes, activation="softmax", name='fc8')(output)
-    m = tf.keras.Model(input, output, name='VGGVox')
-    return m
+#     # Trainable layers ----------------------------------------------------------------------
+#     output = conv_bn_pool(output,layer_idx=1,conv_filters=96,conv_kernel_size=(7,7),conv_strides=(2,2),conv_pad=(1,1), pool='max',pool_size=(3,3),pool_strides=(2,2))
+#     output = conv_bn_pool(output,layer_idx=2,conv_filters=256,conv_kernel_size=(5,5),conv_strides=(2,2),conv_pad=(1,1), pool='max',pool_size=(3,3),pool_strides=(2,2))
+#     output = conv_bn_pool(output,layer_idx=3,conv_filters=384,conv_kernel_size=(3,3),conv_strides=(1,1),conv_pad=(1,1))
+#     output = conv_bn_pool(output,layer_idx=4,conv_filters=256,conv_kernel_size=(3,3),conv_strides=(1,1),conv_pad=(1,1))
+#     output = conv_bn_pool(output,layer_idx=5,conv_filters=256,conv_kernel_size=(3,3),conv_strides=(1,1),conv_pad=(1,1), pool='max',pool_size=(5,3),pool_strides=(3,2))		
+#     output = conv_bn_dynamic_apool(output,layer_idx=6,conv_filters=4096,conv_kernel_size=(5,1),conv_strides=(1,1),conv_pad=(0,0), conv_layer_prefix='fc')
+#     output = conv_bn_pool(output,layer_idx=7,conv_filters=1024,conv_kernel_size=(1,1),conv_strides=(1,1),conv_pad=(0,0), conv_layer_prefix='fc')
+#     output = tf.keras.layers.Lambda(lambda y: K.l2_normalize(y, axis=3), name='norm')(output)
+#     output = tf.keras.layers.Dense(num_classes, activation="softmax", name='fc8')(output)
+#     m = tf.keras.Model(input, output, name='VGGVox')
+#     return m
 
 def vgg_nang_et_al(hparams, num_classes, stateful=False, dtype=tf.float32, inference=False):
     # Preprocessing parameters

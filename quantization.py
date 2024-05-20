@@ -93,7 +93,7 @@ def symmetric_qauntize_tensor(x, num_bits=4, max_range=1e-8, hparams=None):
     max = tf.where(max > max_range, max, max_range)
     q = (pow(2, num_bits-1)-1) / (max + 1e-8)
     quantized = tf.round(q*x)
-    return quantized
+    return x + tf.stop_gradient(-x + quantized)
 
 def quantize_over_range(x, num_bits=4):
     """

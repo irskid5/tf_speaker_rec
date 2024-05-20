@@ -19,6 +19,7 @@ import tensorflow as tf
 import keras.backend as K
 import tensorflow_datasets as tfds
 import numpy as np
+import csv
 
 # DATA
 import data
@@ -36,7 +37,7 @@ num_workers = 1
 dtype = tf.float32
 
 # Directory with hparams (need for dataset params)
-checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202302/20230208-192733/checkpoints/"
+checkpoint_dir = "/media/vele/Samsung USB1/masters/tf_speaker_rec_runs/runs/202211/20221125-112620/checkpoints/"
 
 # Init hparams
 hparams, tb_hparams = setup_hparams(
@@ -98,20 +99,24 @@ def prepare_for_tfhe(x, y):
 
 # Preprocess the data
 AUTOTUNE = tf.data.experimental.AUTOTUNE
-ds_test = ds_test.filter(lambda x, y: tf.shape(x)[0] < 64000)
+# ds_test = ds_test.filter(lambda x, y: tf.shape(x)[0] < 64000)
 ds_test = ds_test.map(prepare_for_tfhe, num_parallel_calls=AUTOTUNE)
 
 print("Preprocessed VOXCELEB for TFHE")
 
+
 # Iterate over the dataset and append the elements to the list
-x = []
-y = []
-for i, example in enumerate(ds_test):
-    x.append(example[0].numpy())
-    y.append(example[1].numpy())
-    if i < 10:
-        print("x_len = %d, y_val = %d" % (x[i].shape[0], y[i]))
-y = np.array(y)
+with open('./voxceleb_num_timesteps_ylabel.csv', "w", newline="") as csvfile:
+    csvwriter = csv.writer(csvfile)
+    x = []
+    y = []
+    for i, example in enumerate(ds_test):
+        x.append(example[0].numpy())
+        y.append(example[1].numpy())
+        # if i < 10:
+        #     print("x_len = %d, y_val = %d" % (x[i].shape[0], y[i]))
+        csvwriter.writerow([x[i].shape[0],  y[i]])
+    y = np.array(y)
 
 # More pythonic lol
 # X, y = zip(*tfds.as_numpy(ds_test))
@@ -119,10 +124,10 @@ y = np.array(y)
 print("Converted to numpy")
 
 # Save files
-directory = './voxceleb_preprocessed'
-if not os.path.exists(directory):
-    os.makedirs(directory)
-np.savez(directory+"/voxceleb_tern.npz", *x)
-np.save(directory+"/voxceleb_labels.npy", y)
+# directory = './voxceleb_preprocessed'
+# if not os.path.exists(directory):
+#     os.makedirs(directory)
+# np.savez(directory+"/voxceleb_tern.npz", *x)
+# np.save(directory+"/voxceleb_labels.npy", y)
 
-print("Saved NPY files of preprocessed VOXCELEB Images and Labels")
+# print("Saved NPY files of preprocessed VOXCELEB Images and Labels")

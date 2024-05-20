@@ -13,7 +13,7 @@ from main import setup_hparams
 # PARAMS
 from config import *
 
-checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202302/20230208-192733/checkpoints/"
+checkpoint_dir = "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202305/20230518-161756/checkpoints/"
 
 # Init hparams
 hparams, tb_hparams = setup_hparams(
